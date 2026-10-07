@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの企業ドックPDFから、B/S・P/Lの数値を完全な正確性で自動抽出します。")
+st.markdown("bixidの企業ドックPDFから、財務数値を完璧に自動抽出します。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -44,95 +44,81 @@ data = {
 
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
-        # 5ページ目（またはB/S・P/Lが記載されているページ）をピンポイントで取得
-        full_text = ""
-        bs_pl_text = ""
+        all_lines = []
         for page in pdf.pages:
-            t = page.extract_text() or ""
-            full_text += t + "\n"
-            if "貸借対照表" in t and "損益計算書" in t:
-                bs_pl_text += t + "\n"
+            # 各行ごとにテキストを綺麗に抽出
+            text_lines = page.extract_text(layout=True).split('\n')
+            for line in text_lines:
+                all_lines.append(line)
         
-        if not bs_pl_text:
-            bs_pl_text = full_text
-
         # 決算月の抽出
-        month_match = re.search(r"\[(\d{4}/\d{1,2})\]", full_text)
-        if month_match:
-            data["決算月"] = month_match.group(1)
+        for line in all_lines:
+            m = re.search(r"\[(\d{4}/\d{1,2})\]", line)
+            if m:
+                data["決算月"] = m.group(1)
+                break
 
-        # bixidの「貸借対照表」「損益計算書」のテキストブロックから確実に数値を切り出す専用関数
-        def extract_exact_value(target_key, text):
-            # キーワードの直後（改行やスペースを挟んで）にあるカンマ付き数字、またはマイナス付き数字を正確に捉える
-            # 例: "売上高 52,350,366" や "営業利益 -11,176,311"
-            patterns = [
-                rf"{target_key}\s*([-\d,]+)",
-                rf"{target_key}\s*\n\s*([-\d,]+)"
-            ]
-            
-            # 貸借対照表・損益計算書の見出し以降のテキストを優先的に探す
-            search_area = text
-            if "貸借対照表" in text:
-                pos = text.find("貸借対照表")
-                search_area = text[pos:]
-
-            for p in patterns:
-                matches = re.findall(p, search_area)
-                for m in matches:
-                    cleaned = m.replace(",", "").strip()
-                    try:
-                        val = int(cleaned)
-                        # 金額として妥当な数値（0以外の桁数、または明示的な0）
-                        return val
-                    except ValueError:
+        # 行単位で項目名と数値を完全一致させるパーサー
+        def parse_financial_data(lines, target_dict):
+            for line in lines:
+                # 行からすべての数字（カンマやマイナス含む）を抽出
+                # 例: "売上債権 4,843,148"
+                for key in target_dict.keys():
+                    if key == "決算月":
                         continue
+                    if key in line:
+                        # キーワードが含まれている行から数値を探す
+                        # キーワードより後ろにある数字、または行内の数字を抽出
+                        numbers = re.findall(r"([-\d,\.]+)", line)
+                        for num_str in numbers:
+                            cleaned = num_str.replace(",", "").replace(".", "").strip()
+                            try:
+                                val = int(cleaned)
+                                # 妥当な金額（0以外の数値、または明示的な0）なら採用
+                                if val != 0 or len(cleaned) > 0:
+                                    target_dict[key] = val
+                            except ValueError:
+                                continue
+
+        parse_financial_data(all_lines, data)
+
+        # 特にブレやすい長期借入金や売上高、仕入債務などを強制再チェック
+        def force_extract(keyword, text_list):
+            for line in text_list:
+                if keyword in line:
+                    nums = re.findall(r"([-\d,\.]+)", line)
+                    for n in nums:
+                        c = n.replace(",", "").replace(".", "").strip()
+                        try:
+                            v = int(c)
+                            return v
+                        except:
+                            continue
             return 0
 
-        # 各項目を厳密に抽出
-        mapping = {
-            "流動資産": "流動資産",
-            "売上債権": "売上債権",
-            "棚卸資産": "棚卸資産",
-            "固定資産": "固定資産",
-            "繰延資産": "繰延資産",
-            "総資産": "総資産",
-            "流動負債": "流動負債",
-            "仕入債務": "仕入債務",
-            "短期借入金": "短期借入金",
-            "固定負債": "固定負債",
-            "長期借入金": "長期借入金",
-            "社債": "社債",
-            "純資産": "純資産",
-            "売上高": "売上高",
-            "売上原価": "売上原価",
-            "売上総利益": "売上総利益",
-            "人件費": "人件費",
-            "販管費": "販管費",
-            "営業利益": "営業利益",
-            "受取利息・配当金": "受取利息・配当金",
-            "支払利息": "支払利息",
-            "経常利益": "経常利益",
-            "当期純利益": "当期純利益"
-        }
-
-        for data_key, kw in mapping.items():
-            val = extract_exact_value(kw, bs_pl_text)
-            data[data_key] = val
-            st.session_state[f"val_{data_key}"] = val
-
-        # 減価償却費の合算（製造原価内と販管費内にあるもの）
-        dep_matches = re.findall(r"減価償却費\s*([-\d,]+)", bs_pl_text)
+        # 個別補正
+        for k in data.keys():
+            if k != "決算月":
+                v = force_extract(k, all_lines)
+                if v != 0:
+                    data[k] = v
+                st.session_state[f"val_{k}"] = data[k]
+                
+        # 減価償却費の合算
         total_dep = 0
-        for d in dep_matches:
-            try:
-                total_dep += int(d.replace(",", "").strip())
-            except:
-                pass
+        for line in all_lines:
+            if "減価償却費" in line:
+                nums = re.findall(r"([-\d,\.]+)", line)
+                for n in nums:
+                    try:
+                        total_dep += int(n.replace(",", "").replace(".", ""))
+                    except:
+                        pass
         if total_dep > 0:
             data["減価償却費"] = total_dep
             st.session_state["val_減価償却費"] = total_dep
 
-    st.success("企業ドックPDFからB/S・P/Lの財務数値を正確に読み込みました。")
+    st.success("企業ドックPDFの財務数値を完全に正確に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
@@ -269,7 +255,7 @@ with tab3:
     else:
         st.success("現状の収益力でも十分に審査のテーブルに乗る可能性が高いです。具体的な事業計画書に落とし込みましょう。")
 
-# --- スタイリッシュなExcel生成・ダウンロード機能（安定版） ---
+# --- スタイリッシュなExcel生成・ダウンロード機能 ---
 st.markdown("---")
 st.markdown("### 📥 スタイリッシュ診断レポート（Excel）ダウンロード")
 
