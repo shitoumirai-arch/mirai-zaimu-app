@@ -65,6 +65,7 @@ if pasted_text:
     if month_match:
         data["決算月"] = month_match.group(1)
 
+    # ★重要修正：読み取るキーワード辞書に「減価償却費」を追加
     keyword_map = {
         "流動資産": "流動資産",
         "売上債権": "売上債権",
@@ -83,6 +84,7 @@ if pasted_text:
         "売上原価": "売上原価",
         "売上総利益": "売上総利益",
         "人件費": "人件費",
+        "減価償却費": "減価償却費",  # ← ここが抜けていたため追加！
         "販管費": "販管費",
         "営業利益": "営業利益",
         "受取利息・配当金": "受取利息・配当金",
@@ -105,7 +107,7 @@ if pasted_text:
                         if cleaned_num and cleaned_num != "-":
                             try:
                                 val = int(cleaned_num)
-                                # ★減価償却費の合算処理（製造原価と販管費の両方を見つけるたびに足す）
+                                # 減価償却費の合算処理（製造原価と販管費の両方を見つけるたびに足す）
                                 if dict_key == "減価償却費":
                                     data["減価償却費"] += val
                                 else:
@@ -241,7 +243,6 @@ with tab3:
 
     with col3_2:
         st.subheader("【ブロック3】目標利益の逆算")
-        # ★引数エラーを修正済み
         kibou_gaku = input_with_comma("追加希望融資額（円）", "追加希望融資額", 10000000)
         hensai_kikan = st.slider("希望返済期間（年）", min_value=1, max_value=20, value=7)
         
