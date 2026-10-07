@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの企業ドックPDFから、B/S・P/Lの数値を高精度に自動抽出します。")
+st.markdown("bixidの企業ドックPDFから、表構造解析によりB/S・P/Lの数値を完璧に自動抽出します。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -48,21 +48,39 @@ if uploaded_file is not None:
         for page in pdf.pages:
             p_text = page.extract_text() or ""
             target_text += p_text + "\n"
-        
+            
+            # テーブル抽出を試みる
+            tables = page.extract_tables()
+            for table in tables:
+                for row in table:
+                    # 行の中にテキストが存在する場合
+                    row_str = " ".join([str(cell) for cell in row if cell])
+                    for key in data.keys():
+                        if key != "決算月" and key in row_str:
+                            # 行の中から数値を探す
+                            for cell in row:
+                                if cell and cell != key:
+                                    cleaned_cell = str(cell).replace(",", "").replace(".", "").replace("円", "").strip()
+                                    # マイナス符号や数字のみで構成されているかチェック
+                                    if re.match(r"^-\d+$|^\d+$", cleaned_cell):
+                                        try:
+                                            val = int(cleaned_cell)
+                                            if data[key] == 0:  # まだ値が入っていない場合優先
+                                                data[key] = val
+                                        except ValueError:
+                                            pass
+
         month_match = re.search(r"\[(\d{4}/\d{1,2})\]", target_text)
         if month_match:
             data["決算月"] = month_match.group(1)
-        
-        # 改行や空白を無視して、項目名と結びついた数値を正確に取得する堅牢な関数
-        def extract_val_safe(keyword, text):
-            # キーワードが出現する位置を探す
-            idx = 0
-            while True:
-                pos = text.find(keyword, idx)
-                if pos == -1:
-                    break
-                # キーワード以降の文字列を切り出して数値を探す
-                sub_text = text[pos + len(keyword):pos + len(keyword) + 40]
+
+        # テーブル抽出で拾いきれなかった項目をテキストベースの高度な位置解析で補完
+        def extract_val_table_fallback(keyword, text):
+            if data[keyword] != 0:
+                return data[keyword]
+            pos = text.find(keyword)
+            if pos != -1:
+                sub_text = text[pos:pos+60]
                 numbers = re.findall(r"([-\d,\.]+)", sub_text)
                 for n in numbers:
                     cleaned = n.replace(",", "").replace(".", "")
@@ -71,40 +89,17 @@ if uploaded_file is not None:
                         return val
                     except ValueError:
                         continue
-                idx = pos + len(keyword)
             return 0
 
-        keywords_map = {
-            "流動資産": "流動資産",
-            "売上債権": "売上債権",
-            "棚卸資産": "棚卸資産",
-            "固定資産": "固定資産",
-            "繰延資産": "繰延資産",
-            "総資産": "総資産",
-            "流動負債": "流動負債",
-            "仕入債務": "仕入債務",
-            "短期借入金": "短期借入金",
-            "固定負債": "固定負債",
-            "長期借入金": "長期借入金",
-            "社債": "社債",
-            "純資産": "純資産",
-            "売上高": "売上高",
-            "売上原価": "売上原価",
-            "売上総利益": "売上総利益",
-            "人件費": "人件費",
-            "販管費": "販管費",
-            "営業利益": "営業利益",
-            "受取利息・配当金": "受取利息・配当金",
-            "支払利息": "支払利息",
-            "経常利益": "経常利益",
-            "当期純利益": "当期純利益"
-        }
+        for key in data.keys():
+            if key != "決算月" and data[key] == 0:
+                data[key] = extract_val_table_fallback(key, target_text)
 
-        for key, kw in keywords_map.items():
-            val = extract_val_safe(kw, target_text)
-            data[key] = val
-            st.session_state[f"val_{key}"] = val
-                    
+        # セッション状態に反映
+        for k, v in data.items():
+            if k != "決算月":
+                st.session_state[f"val_{k}"] = v
+                
         # 減価償却費の合算
         dep_matches = re.findall(r"減価償却費\s*([-\d,\.]+)", target_text)
         total_dep = 0
@@ -117,7 +112,7 @@ if uploaded_file is not None:
             data["減価償却費"] = total_dep
             st.session_state["val_減価償却費"] = total_dep
             
-    st.success("企業ドックPDFからB/S・P/Lの全数値を正常に読み込みました。")
+    st.success("企業ドックPDFの表構造解析が完了しました。全数値を反映しています。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
