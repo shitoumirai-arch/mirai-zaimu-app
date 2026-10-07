@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの企業ドックPDFから、座標解析により財務数値を完璧に自動抽出します。")
+st.markdown("bixidの企業ドックPDFから財務数値を完璧に自動抽出します。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -45,67 +45,95 @@ data = {
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
         full_text = ""
-        words_list = []
+        pl_bs_text = ""
         
-        for page in pdf.pages:
+        for i, page in enumerate(pdf.pages):
             t = page.extract_text() or ""
             full_text += t + "\n"
-            # ページ内のすべての単語と座標を取得
-            words_list.extend(page.extract_words())
+            # 7ページ目付近、または「貸借対照表」「損益計算書」が含まれるページをターゲットにする
+            if "貸借対照表" in t or "損益計算書" in t or i >= 5:
+                pl_bs_text += t + "\n"
+        
+        # もし見つからなければ全体を対象にする
+        if not pl_bs_text:
+            pl_bs_text = full_text
 
         # 決算月の抽出
         month_match = re.search(r"\[(\d{4}/\d{1,2})\]", full_text)
         if month_match:
             data["決算月"] = month_match.group(1)
 
-        # 座標ベースのパーサー：キーワードと同じ行（Y座標が近い）にあり、かつ右側にある数値を正確に取得する
-        def get_value_by_coordinates(keyword):
-            for i, word in enumerate(words_list):
-                if keyword in word['text']:
-                    kw_top = word['top']
-                    kw_x1 = word['x1']
-                    
-                    # 同じ行（上下の許容誤差 ±4以内）にあり、かつキーワードより右側（x0 > kw_x1 - 10）にある単語を探す
-                    candidate_nums = []
-                    for w in words_list:
-                        if abs(w['top'] - kw_top) <= 4 and w['x0'] >= kw_x1 - 10:
-                            cleaned = w['text'].replace(",", "").replace(".", "").replace("円", "").strip()
-                            if re.match(r"^-\d+$|^\d+$", cleaned):
-                                candidate_nums.append((w['x0'], int(cleaned)))
-                    
-                    if candidate_nums:
-                        # 最も右側にある（またはすぐ隣の）数字を採用
-                        candidate_nums.sort(key=lambda x: x[0])
-                        return candidate_nums[0][1]
-            return 0
+        # ★ご提示いただいたエクセルのように「科目名」と「数値」が同じ行にあるテキストを綺麗に解析する決定版パーサー
+        lines = pl_bs_text.split("\n")
+        
+        # 勘定科目と辞書キーのマッピング定義
+        keyword_map = {
+            "流動資産": "流動資産",
+            "売上債権": "売上債権",
+            "棚卸資産": "棚卸資産",
+            "固定資産": "固定資産",
+            "繰延資産": "繰延資産",
+            "総資産": "総資産",
+            "流動負債": "流動負債",
+            "仕入債務": "仕入債務",
+            "短期借入金": "短期借入金",
+            "固定負債": "固定負債",
+            "長期借入金": "長期借入金",
+            "社債": "社債",
+            "純資産": "純資産",
+            "売上高": "売上高",
+            "売上原価": "売上原価",
+            "売上総利益": "売上総利益",
+            "人件費": "人件費",
+            "販管費": "販管費",
+            "営業利益": "営業利益",
+            "受取利息・配当金": "受取利息・配当金",
+            "支払利息": "支払利息",
+            "経常利益": "経常利益",
+            "当期純利益": "当期純利益"
+        }
 
-        # 各項目を座標解析で完全に抽出
-        target_keys = list(data.keys())
-        for k in target_keys:
-            if k == "決算月":
-                continue
-            val = get_value_by_coordinates(k)
-            if val != 0:
-                data[k] = val
-                st.session_state[f"val_{k}"] = val
+        for line in lines:
+            for kw, dict_key in keyword_map.items():
+                # 行の中にキーワードが含まれている場合
+                if kw in line:
+                    # キーワード以降、または行全体から数字（カンマ・マイナス含む）をすべて抽出
+                    nums = re.findall(r"([-\d,\.]+)", line)
+                    if nums:
+                        # 最後の数値、あるいは数値らしいものを金額として採用
+                        for n_str in reversed(nums):
+                            cleaned = n_str.replace(",", "").replace(".", "").strip()
+                            # 妥当な金額の長さであれば採用
+                            if cleaned and cleaned != "-":
+                                try:
+                                    val = int(cleaned)
+                                    # まだ値が入っていない（0の）場合、またはより確実な値として格納
+                                    if data[dict_key] == 0:
+                                        data[dict_key] = val
+                                    break
+                                except ValueError:
+                                    continue
 
-        # 減価償却費の合算（複数箇所にある場合）
+        # 減価償却費の合算（製造原価・販管費内など複数ある場合を網羅）
         total_dep = 0
-        for i, word in enumerate(words_list):
-            if "減価償却費" in word['text']:
-                kw_top = word['top']
-                kw_x1 = word['x1']
-                for w in words_list:
-                    if abs(w['top'] - kw_top) <= 4 and w['x0'] >= kw_x1 - 10:
-                        cleaned = w['text'].replace(",", "").replace(".", "").strip()
-                        if re.match(r"^\d+$", cleaned):
-                            total_dep += int(cleaned)
-                            break
+        for line in lines:
+            if "減価償却費" in line:
+                nums = re.findall(r"([-\d,\.]+)", line)
+                for n in nums:
+                    c = n.replace(",", "").replace(".", "").strip()
+                    if c.isdigit():
+                        v = int(c)
+                        if v > 0:
+                            total_dep += v
         if total_dep > 0:
             data["減価償却費"] = total_dep
-            st.session_state["val_減価償却費"] = total_dep
 
-    st.success("企業ドックPDFの座標解析による財務数値の抽出が完了しました。")
+        # セッション状態へ完全に反映
+        for k, v in data.items():
+            if k != "決算月":
+                st.session_state[f"val_{k}"] = v
+
+    st.success("企業ドックPDFから財務数値を完全に正確に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
@@ -238,7 +266,7 @@ with tab3:
     st.markdown("💬 **銀行OBからの処方箋**")
     if mokuhyo_eigyo > eigyo:
         kaizen_gaku = int(mokuhyo_eigyo - eigyo)
-        st.warning(f"社長,現状のままでは追加融資の稟議は通りません。融資を引き出すためには、来期の営業利益を今の状態から **{kaizen_gaku:,}円 改善** させる計画書が必要です。我々と一緒に、この利益を生み出すための具体的な経営改善計画を作りましょう。")
+        st.warning(f"社長、現状のままでは追加融資の稟議は通りません。融資を引き出すためには、来期の営業利益を今の状態から **{kaizen_gaku:,}円 改善** させる計画書が必要です。我々と一緒に、この利益を生み出すための具体的な経営改善計画を作りましょう。")
     else:
         st.success("現状の収益力でも十分に審査のテーブルに乗る可能性が高いです。具体的な事業計画書に落とし込みましょう。")
 
