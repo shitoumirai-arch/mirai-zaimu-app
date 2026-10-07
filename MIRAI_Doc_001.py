@@ -6,23 +6,49 @@ import plotly.express as px
 
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
-st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("財務数値を入力・修正すると、銀行目線での分析指標とレーダーチャートがリアルタイムに変化します。")
+# --- 印刷用（PDF保存用）のCSSスタイル定義 ---
+st.markdown("""
+<style>
+@media print {
+    /* 印刷時に隠す要素（サイドバー、ファイルアップローダー、タブ、ボタン類） */
+    header, [data-testid="stSidebar"], .stFileUploader, .stTabs, .stButton {
+        display: none !important;
+    }
+    body {
+        background-color: white;
+        color: black;
+    }
+}
+</style>
+""", unsafe_allow_html=True)
 
-# --- 補助関数：カンマ区切りの入力欄 ---
+st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーションレポート")
+st.markdown("財務数値を入力・修正すると、銀行目線での分析指標とレーダーチャートが自動生成されます。面談時はそのままブラウザからPDF保存・印刷が可能です。")
+
+# --- 補助関数：カンマ区切りの入力欄（修正版） ---
 def input_with_comma(label, default_value):
-    val_str = st.text_input(label, value=f"{default_value:,}")
+    # セッション状態を使って値を保持・フォーマットする
+    key_str = f"val_{label}"
+    if key_str not in st.session_state:
+        st.session_state[key_str] = default_value
+    
+    # テキスト入力
+    val_str = st.text_input(label, value=f"{st.session_state[key_str]:,}")
+    
+    # 入力値を数値に変換してセッションに保存
     try:
-        return int(val_str.replace(",", "").replace(" ", "").replace(" ", ""))
+        clean_val = int(val_str.replace(",", "").replace(" ", "").replace(" ", ""))
+        st.session_state[key_str] = clean_val
+        return clean_val
     except ValueError:
-        return 0
+        return st.session_state[key_str]
 
-# --- 補助関数：ゼロ割りを防ぐ ---
+# --- ゼロ割りを防ぐ ---
 def safe_div(n, d):
     return n / d if d else 0
 
 # 1. PDFアップロード機能
-uploaded_file = st.file_uploader("bixidのPDFをアップロードしてください", type="pdf")
+uploaded_file = st.file_uploader("bixidの企業ドックPDFをアップロードしてください", type="pdf")
 
 data = {
     "決算月": "",
@@ -61,12 +87,18 @@ if uploaded_file is not None:
             match = re.search(pattern, text)
             if match:
                 try:
-                    data[key] = int(match.group(1).replace(",", "").replace(".", ""))
+                    val_str = match.group(1).replace(",", "").replace(".", "")
+                    val_int = int(val_str)
+                    data[key] = val_int
+                    # セッション状態も初期化
+                    st.session_state[f"val_{key}"] = val_int
                 except ValueError:
                     pass
                     
         total_dep = sum([int(d.replace(",", "").replace(".", "")) for d in re.findall(r"減価償却費[\s\|]*([\d,\.]+)", text)])
-        if total_dep > 0: data["減価償却費"] = total_dep
+        if total_dep > 0: 
+            data["減価償却費"] = total_dep
+            st.session_state["val_減価償却費"] = total_dep
             
     st.success("PDFの読み込みが完了しました。")
 
@@ -74,11 +106,11 @@ if uploaded_file is not None:
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ入力・修正", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
 
 with tab1:
-    st.markdown("###### 実態修正（役員借入金の振替など）を行うと、隣のタブの分析結果やグラフが自動で改善されます。")
+    st.markdown("###### 実態修正（役員借入金の振替など）を行うと、分析結果やグラフが自動で改善されます。")
     col_info1, col_info2, col_info3 = st.columns(3)
-    with col_info1: company_name = st.text_input("企業名", placeholder="株式会社〇〇")
-    with col_info2: kessan_tsuki = st.text_input("決算月", value=data["決算月"], placeholder="例：2026/3")
-    with col_info3: jugyoin = st.number_input("従業員数（名）", min_value=1, value=10) # 効率性計算に必須
+    with col_info1: company_name = st.text_input("企業名", value="株式会社〇〇")
+    with col_info2: kessan_tsuki = st.text_input("決算月", value=data["決算月"] if data["決算月"] else "2026/3")
+    with col_info3: jugyoin = st.number_input("従業員数（名）", min_value=1, value=10)
     
     col_bs, col_pl = st.columns(2)
     with col_bs:
@@ -111,32 +143,27 @@ with tab1:
 kizon_kariire = tanki + chouki + shasai
 kani_cf = eigyo + shokyaku
 
-# 収益性
 roa = safe_div(junrieki, sou_shisan) * 100
 eigyo_rieki_ritsu = safe_div(eigyo, uriage) * 100
 junrieki_ritsu = safe_div(junrieki, uriage) * 100
 
-# 資金力
 shokan_nensu = safe_div(kizon_kariire, kani_cf) if kani_cf > 0 else 999
 gessho_bairitsu = safe_div(kizon_kariire, safe_div(uriage, 12))
 
-# 安全性
 ryudo_hiritsu = safe_div(ryudo_shisan, ryudo_fusai) * 100
 jikoshihon_hiritsu = safe_div(jun_shisan, sou_shisan) * 100
 kotei_choki_hiritsu = safe_div(kotei_shisan, (kotei_fusai + jun_shisan)) * 100
 
-# 効率性
 rodou_bunpai = safe_div(jinkenhi, sori) * 100
 uriage_per_head = safe_div(uriage, jugyoin)
 nenshu_per_head = safe_div(jinkenhi, jugyoin)
 
 with tab2:
-    st.markdown(f"### 📈 財務指標分析 （{company_name}）")
+    st.markdown(f"### 📈 財務指標分析レポート （{company_name} / {kessan_tsuki}期）")
     
     col_chart, col_metrics = st.columns([1, 1.5])
     
     with col_chart:
-        # 銀行目線の簡易スコアリング（5段階評価）
         score_shihon = 5 if jikoshihon_hiritsu >= 30 else 4 if jikoshihon_hiritsu >= 15 else 3 if jikoshihon_hiritsu >= 0 else 2 if jikoshihon_hiritsu >= -10 else 1
         score_ryudo = 5 if ryudo_hiritsu >= 150 else 4 if ryudo_hiritsu >= 100 else 3 if ryudo_hiritsu >= 80 else 2 if ryudo_hiritsu >= 50 else 1
         score_eigyo = 5 if eigyo_rieki_ritsu >= 10 else 4 if eigyo_rieki_ritsu >= 5 else 3 if eigyo_rieki_ritsu >= 0 else 2 if eigyo_rieki_ritsu >= -5 else 1
@@ -152,16 +179,16 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
 
     with col_metrics:
-        st.markdown("#### 12の主要指標")
+        st.markdown("#### 12の主要指標一覧")
         m1, m2, m3 = st.columns(3)
-        m1.metric("ROA (当期純利益)", f"{roa:.1f} %")
+        m1.metric("ROA", f"{roa:.1f} %")
         m2.metric("売上高営業利益率", f"{eigyo_rieki_ritsu:.1f} %")
         m3.metric("売上高当期純利益率", f"{junrieki_ritsu:.1f} %")
         
         m4, m5, m6 = st.columns(3)
-        m4.metric("簡易キャッシュフロー", f"{kani_cf:,} 円")
+        m4.metric("簡易CF", f"{kani_cf:,} 円")
         m5.metric("簡易債務償還年数", f"{shokan_nensu:.1f} 年" if kani_cf > 0 else "測定不能 (赤字)")
-        m6.metric("借入金対月商倍率", f"{gessho_bairitsu:.1f} ヶ月")
+        m6.metric("借入金月商倍率", f"{gessho_bairitsu:.1f} ヶ月")
 
         m7, m8, m9 = st.columns(3)
         m7.metric("流動比率", f"{ryudo_hiritsu:.1f} %")
@@ -169,12 +196,12 @@ with tab2:
         m9.metric("固定長期適合率", f"{kotei_choki_hiritsu:.1f} %")
 
         m10, m11, m12 = st.columns(3)
-        m10.metric("一人当たり売上高", f"{int(uriage_per_head):,} 円")
+        m10.metric("一人当たり売上", f"{int(uriage_per_head):,} 円")
         m11.metric("労働分配率", f"{rodou_bunpai:.1f} %")
         m12.metric("平均年収", f"{int(nenshu_per_head):,} 円")
 
 with tab3:
-    st.markdown("### 🏦 借入余力・逆算シミュレーション")
+    st.markdown(f"### 🏦 借入余力・逆算シミュレーション （{company_name}）")
     col3_1, col3_2 = st.columns(2)
     with col3_1:
         st.subheader("【ブロック1】運転資金枠チェック")
@@ -202,3 +229,11 @@ with tab3:
         st.warning(f"社長、現状のままでは追加融資の稟議は通りません。融資を引き出すためには、来期の営業利益を今の状態から **{int(mokuhyo_eigyo - eigyo):,}円 改善** させる計画書が必要です。我々と一緒に、この利益を生み出すための具体的な経営改善計画を作りましょう。")
     else:
         st.success("現状の収益力でも十分に審査のテーブルに乗る可能性が高いです。具体的な事業計画書に落とし込みましょう。")
+
+# --- PDF保存・印刷案内エリア ---
+st.markdown("---")
+st.markdown("### 🖨️ 社長への提案書（PDF）出力について")
+st.info("面談時にこの画面を社長に提示し、そのままPDFとして保存・印刷して渡すことができます。\n\n"
+        "**【操作手順】**\n"
+        "ブラウザの印刷メニュー（Windowsなら `Ctrl + P`、Macなら `Cmd + P`）を開き、送信先を **「PDFに保存」** に設定してください。\n"
+        "※余分な入力欄やボタンは自動的に消え、きれいな診断レポートとして印刷されます。")
