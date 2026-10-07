@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの企業ドックPDF（7ページ目以降の評価ブロック）から数値を高精度に自動抽出します。")
+st.markdown("bixidの企業ドックPDFから、B/S・P/Lの数値を高精度に自動抽出します。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -44,13 +44,12 @@ data = {
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
         target_text = ""
-        # 7ページ目以降（または全ページの中で「金融機関からの評価」が含まれるページ）を重点的に抽出
+        # 5ページ目以降（B/S・P/Lの記載があるページ）を対象にする
         for page in pdf.pages:
             p_text = page.extract_text() or ""
-            if "金融機関からの評価" in p_text or "貸借対照表" in p_text:
+            if "貸借対照表" in p_text or "損益計算書" in p_text:
                 target_text += p_text + "\n"
         
-        # 万が一見つからない場合は全テキストを対象にする
         if not target_text:
             for page in pdf.pages:
                 target_text += (page.extract_text() or "") + "\n"
@@ -59,59 +58,65 @@ if uploaded_file is not None:
         if month_match:
             data["決算月"] = month_match.group(1)
         
-        # 7ページ目のB/S・P/L表のレイアウト（項目名の直後または付近にある金額）を高精度でキャッチ
-        patterns = {
-            "流動資産": r"流動資産\s*([-\d,\.]+)",
-            "売上債権": r"売上債権\s*([-\d,\.]+)",
-            "棚卸資産": r"棚卸資産\s*([-\d,\.]+)",
-            "固定資産": r"固定資産\s*([-\d,\.]+)",
-            "繰延資産": r"繰延資産\s*([-\d,\.]+)",
-            "総資産": r"総資産\s*([-\d,\.]+)",
-            
-            "流動負債": r"流動負債\s*([-\d,\.]+)",
-            "仕入債務": r"仕入債務\s*([-\d,\.]+)",
-            "短期借入金": r"短期借入金\s*([-\d,\.]+)",
-            "固定負債": r"固定負債\s*([-\d,\.]+)",
-            "長期借入金": r"長期借入金\s*([-\d,\.]+)",
-            "社債": r"社債\s*([-\d,\.]+)",
-            "純資産": r"純資産\s*([-\d,\.]+)",
-            
-            "売上高": r"売上高\s*([-\d,\.]+)",
-            "売上原価": r"売上原価\s*([-\d,\.]+)",
-            "売上総利益": r"売上総利益\s*([-\d,\.]+)",
-            "人件費": r"人件費\s*([-\d,\.]+)",
-            "販管費": r"販管費\s*([-\d,\.]+)",
-            "営業利益": r"営業利益\s*([-\d,\.]+)",
-            "受取利息・配当金": r"受取利息・配当金\s*([-\d,\.]+)",
-            "支払利息": r"支払利息\s*([-\d,\.]+)",
-            "経常利益": r"経常利益\s*([-\d,\.]+)",
-            "当期純利益": r"当期純利益\s*([-\d,\.]+)"
-        }
-        
-        for key, pattern in patterns.items():
-            match = re.search(pattern, target_text)
-            if match:
+        # どんな空白や記号が挟まっていても数値を確実に捉える柔軟な正規表現関数
+        def extract_val(keyword, text):
+            # キーワードの直後にある数値（マイナスやカンマ、ピリオドを含む）を抽出
+            pattern = rf"{keyword}[\s\:\u3000\|\.\w]*?([-\d,\.]+)"
+            matches = re.findall(pattern, text)
+            for m in matches:
+                # 綺麗に数値化できるかテスト
+                cleaned = m.replace(",", "").replace(".", "")
                 try:
-                    val_str = match.group(1).replace(",", "").replace(".", "")
-                    val_int = int(val_str)
-                    data[key] = val_int
-                    st.session_state[f"val_{key}"] = val_int
+                    return int(cleaned)
                 except ValueError:
-                    pass
-                    
+                    continue
+            return 0
+
+        # 各項目を抽出
+        data["流動資産"] = extract_val("流動資産", target_text)
+        data["売上債権"] = extract_val("売上債権", target_text)
+        data["棚卸資産"] = extract_val("棚卸資産", target_text)
+        data["固定資産"] = extract_val("固定資産", target_text)
+        data["繰延資産"] = extract_val("繰延資産", target_text)
+        data["総資産"] = extract_val("総資産", target_text)
+        
+        data["流動負債"] = extract_val("流動負債", target_text)
+        data["仕入債務"] = extract_val("仕入債務", target_text)
+        data["短期借入金"] = extract_val("短期借入金", target_text)
+        data["固定負債"] = extract_val("固定負債", target_text)
+        data["長期借入金"] = extract_val("長期借入金", target_text)
+        data["社債"] = extract_val("社債", target_text)
+        data["純資産"] = extract_val("純資産", target_text)
+        
+        data["売上高"] = extract_val("売上高", target_text)
+        data["売上原価"] = extract_val("売上原価", target_text)
+        data["売上総利益"] = extract_val("売上総利益", target_text)
+        data["人件費"] = extract_val("人件費", target_text)
+        data["販管費"] = extract_val("販管費", target_text)
+        data["営業利益"] = extract_val("営業利益", target_text)
+        data["受取利息・配当金"] = extract_val("受取利息・配当金", target_text)
+        data["支払利息"] = extract_val("支払利息", target_text)
+        data["経常利益"] = extract_val("経常利益", target_text)
+        data["当期純利益"] = extract_val("当期純利益", target_text)
+        
+        # セッション状態に反映
+        for k, v in data.items():
+            if k != "決算月":
+                st.session_state[f"val_{k}"] = v
+                
         # 減価償却費の合算
-        depreciations = re.findall(r"減価償却費\s*([-\d,\.]+)", target_text)
+        dep_matches = re.findall(r"減価償却費[\s\:\u3000\|\.\w]*?([-\d,\.]+)", target_text)
         total_dep = 0
-        for dep in depreciations:
+        for d in dep_matches:
             try:
-                total_dep += int(dep.replace(",", "").replace(".", ""))
+                total_dep += int(d.replace(",", "").replace(".", ""))
             except:
                 pass
         if total_dep > 0: 
             data["減価償却費"] = total_dep
             st.session_state["val_減価償却費"] = total_dep
             
-    st.success("7ページ目の評価ブロックから財務数値を高精度に読み込みました。")
+    st.success("B/SおよびP/Lの全数値を高精度に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
