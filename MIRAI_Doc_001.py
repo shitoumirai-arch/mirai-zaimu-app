@@ -7,10 +7,20 @@ st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断�
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
 st.markdown("bixidの「企業ドック診断結果(PDF)」をアップロードすると、主要数値を自動抽出し、銀行目線での借入余力をシミュレーションします。")
 
+# --- 補助関数：カンマ区切りの入力欄を作る ---
+def input_with_comma(label, default_value):
+    # カンマ付きの文字列としてテキストボックスを表示
+    val_str = st.text_input(label, value=f"{default_value:,}")
+    # カンマや全角半角のスペースを除去して数値（整数）に戻す
+    try:
+        return int(val_str.replace(",", "").replace(" ", "").replace(" ", ""))
+    except ValueError:
+        return 0
+
 # 1. PDFアップロード機能
 uploaded_file = st.file_uploader("bixidのPDFをアップロードしてください", type="pdf")
 
-# 初期値（抽出できなかった場合や手入力用）
+# 初期値
 data = {
     "売上債権": 0, "棚卸資産": 0, "仕入債務": 0,
     "短期借入金": 0, "長期借入金": 0,
@@ -46,20 +56,20 @@ st.markdown("銀行OBの視点で、役員貸付や含み損益などの「実�
 
 col1, col2 = st.columns(2)
 with col1:
-    urio = st.number_input("売上債権（円）", value=data["売上債権"], step=100000)
-    tana = st.number_input("棚卸資産（円）", value=data["棚卸資産"], step=100000)
-    shii = st.number_input("仕入債務（円）", value=data["仕入債務"], step=100000)
+    urio = input_with_comma("売上債権（円）", data["売上債権"])
+    tana = input_with_comma("棚卸資産（円）", data["棚卸資産"])
+    shii = input_with_comma("仕入債務（円）", data["仕入債務"])
 with col2:
-    tanki = st.number_input("短期借入金（円）", value=data["短期借入金"], step=100000)
-    chouki = st.number_input("長期借入金（円）", value=data["長期借入金"], step=100000)
-    eigyo = st.number_input("営業利益（円）", value=data["営業利益"], step=100000)
-    shokyaku = st.number_input("減価償却費（円）", value=data["減価償却費"], step=100000)
+    tanki = input_with_comma("短期借入金（円）", data["短期借入金"])
+    chouki = input_with_comma("長期借入金（円）", data["長期借入金"])
+    eigyo = input_with_comma("営業利益（円）", data["営業利益"])
+    shokyaku = input_with_comma("減価償却費（円）", data["減価償却費"])
 
 kizon_kariire = tanki + chouki
 kani_cf = eigyo + shokyaku
 
 # 3. シミュレーション実行エリア
-st.header("2. 融資可能額・逆算シミュレーション")
+st.header("2. 融希可能額・逆算シミュレーション")
 
 col3, col4 = st.columns(2)
 with col3:
