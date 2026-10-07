@@ -51,10 +51,24 @@ pasted_text = st.text_area(
 )
 
 if pasted_text:
-    lines = pasted_text.split("\n")
+    # ★重要追加：PDF特有の「康熙部首（見た目は同じだが文字コードが違う文字）」や特殊空白を、通常の文字に一括置換する
+    translation_table = str.maketrans({
+        '⾼': '高',
+        '⼊': '入',
+        '⾦': '金',
+        '⻑': '長',
+        '⼈': '人',
+        '⽀': '支',
+        '\u2003': ' ',  # Em Space（特殊な空白）
+        '\u3000': ' ',  # 全角スペース
+    })
+    
+    # 特殊文字をクリーンアップしたテキスト
+    cleaned_text = pasted_text.translate(translation_table)
+    lines = cleaned_text.split("\n")
     
     # 決算月の検出
-    month_match = re.search(r"(\d{4}/\d{1,2})", pasted_text)
+    month_match = re.search(r"(\d{4}/\d{1,2})", cleaned_text)
     if month_match:
         data["決算月"] = month_match.group(1)
 
@@ -90,10 +104,10 @@ if pasted_text:
                 nums = re.findall(r"([-\d,\.]+)", line)
                 if nums:
                     for n_str in reversed(nums):
-                        cleaned = n_str.replace(",", "").replace(".", "").strip()
-                        if cleaned and cleaned != "-":
+                        cleaned_num = n_str.replace(",", "").replace(".", "").strip()
+                        if cleaned_num and cleaned_num != "-":
                             try:
-                                val = int(cleaned)
+                                val = int(cleaned_num)
                                 if dict_key == "減価償却費":
                                     data["減価償却費"] += val
                                 else:
@@ -107,7 +121,7 @@ if pasted_text:
         if k != "決算月":
             st.session_state[f"val_{k}"] = v
 
-    st.success("✅ 貼り付けられたテキストから財務データを完全に正確に読み込みました！")
+    st.success("✅ 貼り付けられたテキスト（文字化け補正済み）から財務データを完全に読み込みました！")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
