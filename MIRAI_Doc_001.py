@@ -12,9 +12,10 @@ st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断�
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
 st.markdown("bixidのPDFからコピーしたテキストを貼り付けるだけで、財務データを完璧に一発取り込みします。")
 
-# --- 補助関数：カンマ区切りの入力欄 ---
-def input_with_comma(label, default_value):
-    key_str = f"val_{label}"
+# --- 補助関数：カンマ区切りの入力欄（変数名ズレ解消版） ---
+def input_with_comma(label, data_key, default_value):
+    # 画面上のラベル（label）と、内部データ用のキー（data_key）を分離してズレを防止
+    key_str = f"val_{data_key}"
     if key_str not in st.session_state:
         st.session_state[key_str] = default_value
     
@@ -51,19 +52,12 @@ pasted_text = st.text_area(
 )
 
 if pasted_text:
-    # ★重要追加：PDF特有の「康熙部首（見た目は同じだが文字コードが違う文字）」や特殊空白を、通常の文字に一括置換する
+    # PDF特有の「康熙部首」や特殊空白を、通常の文字に一括置換
     translation_table = str.maketrans({
-        '⾼': '高',
-        '⼊': '入',
-        '⾦': '金',
-        '⻑': '長',
-        '⼈': '人',
-        '⽀': '支',
-        '\u2003': ' ',  # Em Space（特殊な空白）
-        '\u3000': ' ',  # 全角スペース
+        '⾼': '高', '⼊': '入', '⾦': '金', '⻑': '長', '⼈': '人', '⽀': '支',
+        '\u2003': ' ', '\u3000': ' '
     })
     
-    # 特殊文字をクリーンアップしたテキスト
     cleaned_text = pasted_text.translate(translation_table)
     lines = cleaned_text.split("\n")
     
@@ -99,6 +93,10 @@ if pasted_text:
     }
 
     for line in lines:
+        # ※がついている行（※前期経常利益など）はノイズになるため無視する
+        if "※" in line:
+            continue
+            
         for kw, dict_key in keyword_map.items():
             if kw in line:
                 nums = re.findall(r"([-\d,\.]+)", line)
@@ -108,10 +106,13 @@ if pasted_text:
                         if cleaned_num and cleaned_num != "-":
                             try:
                                 val = int(cleaned_num)
+                                # 減価償却費は複数箇所あるので合算
                                 if dict_key == "減価償却費":
                                     data["減価償却費"] += val
                                 else:
-                                    data[dict_key] = val
+                                    # 既に値が入っている場合は上書きしない（最初の出現を優先）
+                                    if data[dict_key] == 0:
+                                        data[dict_key] = val
                                 break
                             except ValueError:
                                 continue
@@ -121,7 +122,7 @@ if pasted_text:
         if k != "決算月":
             st.session_state[f"val_{k}"] = v
 
-    st.success("✅ 貼り付けられたテキスト（文字化け補正済み）から財務データを完全に読み込みました！")
+    st.success("✅ 貼り付けられたテキストからすべての財務データを完全に読み込みました！")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
@@ -135,29 +136,30 @@ with tab1:
     col_bs, col_pl = st.columns(2)
     with col_bs:
         st.markdown("#### 【貸借対照表 (B/S)】")
-        ryudo_shisan = input_with_comma("流動資産", data["流動資産"])
-        urio = input_with_comma(" 売上債権", data["売上債権"])
-        tana = input_with_comma(" 棚卸資産", data["棚卸資産"])
-        kotei_shisan = input_with_comma("固定資産", data["固定資産"])
-        sou_shisan = input_with_comma("総資産", data["総資産"])
+        # 第1引数が画面表示用の文字、第2引数が内部のデータキー名
+        ryudo_shisan = input_with_comma("流動資産", "流動資産", data["流動資産"])
+        urio = input_with_comma(" 売上債権", "売上債権", data["売上債権"])
+        tana = input_with_comma(" 棚卸資産", "棚卸資産", data["棚卸資産"])
+        kotei_shisan = input_with_comma("固定資産", "固定資産", data["固定資産"])
+        sou_shisan = input_with_comma("総資産", "総資産", data["総資産"])
         st.markdown("---")
-        ryudo_fusai = input_with_comma("流動負債", data["流動負債"])
-        shii = input_with_comma(" 仕入債務", data["仕入債務"])
-        tanki = input_with_comma(" 短期借入金", data["短期借入金"])
-        kotei_fusai = input_with_comma("固定負債", data["固定負債"])
-        chouki = input_with_comma(" 長期借入金", data["長期借入金"])
-        shasai = input_with_comma(" 社債", data["社債"])
-        jun_shisan = input_with_comma("純資産", data["純資産"])
+        ryudo_fusai = input_with_comma("流動負債", "流動負債", data["流動負債"])
+        shii = input_with_comma(" 仕入債務", "仕入債務", data["仕入債務"])
+        tanki = input_with_comma(" 短期借入金", "短期借入金", data["短期借入金"])
+        kotei_fusai = input_with_comma("固定負債", "固定負債", data["固定負債"])
+        chouki = input_with_comma(" 長期借入金", "長期借入金", data["長期借入金"])
+        shasai = input_with_comma(" 社債", "社債", data["社債"])
+        jun_shisan = input_with_comma("純資産", "純資産", data["純資産"])
 
     with col_pl:
         st.markdown("#### 【損益計算書 (P/L)】")
-        uriage = input_with_comma("売上高", data["売上高"])
-        sori = input_with_comma("売上総利益（粗利）", data["売上総利益"])
-        jinkenhi = input_with_comma(" うち人件費", data["人件費"])
-        shokyaku = input_with_comma(" うち減価償却費", data["減価償却費"])
-        eigyo = input_with_comma("営業利益", data["営業利益"])
-        keijo = input_with_comma("経常利益", data["経常利益"])
-        junrieki = input_with_comma("当期純利益", data["当期純利益"])
+        uriage = input_with_comma("売上高", "売上高", data["売上高"])
+        sori = input_with_comma("売上総利益（粗利）", "売上総利益", data["売上総利益"])
+        jinkenhi = input_with_comma(" うち人件費", "人件費", data["人件費"])
+        shokyaku = input_with_comma(" うち減価償却費", "減価償却費", data["減価償却費"])
+        eigyo = input_with_comma("営業利益", "営業利益", data["営業利益"])
+        keijo = input_with_comma("経常利益", "経常利益", data["経常利益"])
+        junrieki = input_with_comma("当期純利益", "当期純利益", data["当期純利益"])
 
     st.markdown("---")
     st.markdown("#### ✍️ 診断者（銀行OB）の総合所見・今後の課題")
