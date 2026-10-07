@@ -5,7 +5,7 @@ import re
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの「企業ドック診断結果(PDF)」をアップロードすると、主要数値を自動抽出し、銀行目線での借入余力をシミュレーションします。")
+st.markdown("bixidの「企業ドック診断結果(PDF)」をアップロードすると、B/S・P/Lの全項目を自動抽出し、銀行目線での借入余力をシミュレーションします。")
 
 # --- 補助関数：カンマ区切りの入力欄を作る ---
 def input_with_comma(label, default_value):
@@ -18,62 +18,140 @@ def input_with_comma(label, default_value):
 # 1. PDFアップロード機能
 uploaded_file = st.file_uploader("bixidのPDFをアップロードしてください", type="pdf")
 
-# 初期値
+# 初期値データ辞書の作成（PDFから拾えなかった時は0になる）
 data = {
-    "売上債権": 0, "棚卸資産": 0, "仕入債務": 0,
-    "短期借入金": 0, "長期借入金": 0,
-    "営業利益": 0, "減価償却費": 0
+    "決算月": "",
+    "流動資産": 0, "売上債権": 0, "棚卸資産": 0, "固定資産": 0, "繰延資産": 0, "総資産": 0,
+    "流動負債": 0, "仕入債務": 0, "短期借入金": 0, "固定負債": 0, "長期借入金": 0, "社債": 0, "純資産": 0,
+    "売上高": 0, "売上原価": 0, "売上総利益": 0, "人件費": 0, "販管費": 0, "減価償却費": 0,
+    "営業利益": 0, "受取利息・配当金": 0, "支払利息": 0, "経常利益": 0, "当期純利益": 0
 }
 
-# PDFからのテキスト抽出と数値解析（強化版）
+# PDFからのテキスト抽出と数値解析
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
         text = ""
         for page in pdf.pages:
             text += page.extract_text() or ""
         
-        # [\s\|]* で空白や表の区切り線を無視し、[\d,\.]+ でピリオド誤認識も拾う
+        # 決算月の抽出 (例: [2026/3])
+        month_match = re.search(r"\[(\d{4}/\d{1,2})\]", text)
+        if month_match:
+            data["決算月"] = month_match.group(1)
+        
+        # 各科目の正規表現パターン
         patterns = {
+            "流動資産": r"流動資産[\s\|]*([\d,\.]+)",
             "売上債権": r"売上債権[\s\|]*([\d,\.]+)",
             "棚卸資産": r"棚卸資産[\s\|]*([\d,\.]+)",
+            "固定資産": r"固定資産[\s\|]*([\d,\.]+)",
+            "繰延資産": r"繰延資産[\s\|]*([\d,\.]+)",
+            "総資産": r"総資産[\s\|]*([\d,\.]+)",
+            
+            "流動負債": r"流動負債[\s\|]*([\d,\.]+)",
             "仕入債務": r"仕入債務[\s\|]*([\d,\.]+)",
             "短期借入金": r"短期借入金[\s\|]*([\d,\.]+)",
+            "固定負債": r"固定負債[\s\|]*([\d,\.]+)",
             "長期借入金": r"長期借入金[\s\|]*([\d,\.]+)",
+            "社債": r"社債[\s\|]*([\d,\.]+)",
+            "純資産": r"純資産[\s\|]*([-\d,\.]+)",
+            
+            "売上高": r"売上高[\s\|]*([\d,\.]+)",
+            "売上原価": r"売上原価[\s\|]*([\d,\.]+)",
+            "売上総利益": r"売上総利益[\s\|]*([-\d,\.]+)",
+            "人件費": r"人件費[\s\|]*([\d,\.]+)",
+            "販管費": r"販管費[\s\|]*([\d,\.]+)",
             "営業利益": r"営業利益[\s\|]*([-\d,\.]+)",
-            "減価償却費": r"減価償却費[\s\|]*([\d,\.]+)"
+            "受取利息・配当金": r"受取利息・配当金[\s\|]*([\d,\.]+)",
+            "支払利息": r"支払利息[\s\|]*([\d,\.]+)",
+            "経常利益": r"経常利益[\s\|]*([-\d,\.]+)",
+            "当期純利益": r"当期純利益[\s\|]*([-\d,\.]+)"
         }
         
         for key, pattern in patterns.items():
             match = re.search(pattern, text)
             if match:
-                # カンマと、誤認識されたピリオドを除去して数値化
                 val_str = match.group(1).replace(",", "").replace(".", "")
                 try:
                     data[key] = int(val_str)
                 except ValueError:
                     pass
-    st.success("PDFの読み込みが完了しました。数値を自動入力しています（必要に応じて手修正してください）。")
+        
+        # 減価償却費は複数箇所（製造原価と販管費など）にある場合を想定し、すべて合算する
+        depreciations = re.findall(r"減価償却費[\s\|]*([\d,\.]+)", text)
+        total_dep = 0
+        for dep in depreciations:
+            try:
+                total_dep += int(dep.replace(",", "").replace(".", ""))
+            except:
+                pass
+        if total_dep > 0:
+            data["減価償却費"] = total_dep
+            
+    st.success("PDFの読み込みが完了しました。")
 
-# 2. 抽出データの確認・修正エリア
-st.header("1. 財務データの確認・修正")
-st.markdown("銀行OBの視点で、役員貸付や含み損益などの「実態修正」がある場合は、ここで直接数値を書き換えてください。")
+# 2. 基本情報と抽出データの確認・修正エリア
+st.header("1. 基本情報・財務データの確認・修正")
+st.markdown("PDFから抽出された決算数値を一覧表示しています。実態修正が必要な項目は直接数値を書き換えてください。")
 
-col1, col2 = st.columns(2)
-with col1:
-    urio = input_with_comma("売上債権（円）", data["売上債権"])
-    tana = input_with_comma("棚卸資産（円）", data["棚卸資産"])
-    shii = input_with_comma("仕入債務（円）", data["仕入債務"])
-with col2:
-    tanki = input_with_comma("短期借入金（円）", data["短期借入金"])
-    chouki = input_with_comma("長期借入金（円）", data["長期借入金"])
-    eigyo = input_with_comma("営業利益（円）", data["営業利益"])
-    shokyaku = input_with_comma("減価償却費（円）", data["減価償却費"])
+# --- 追加：企業名と決算月 ---
+st.subheader("📌 基本情報")
+col_info1, col_info2 = st.columns(2)
+with col_info1:
+    company_name = st.text_input("企業名", placeholder="株式会社〇〇")
+with col_info2:
+    kessan_tsuki = st.text_input("決算月", value=data["決算月"], placeholder="例：2026/3")
 
-kizon_kariire = tanki + chouki
+# --- 追加：B/SとP/Lをタブで整理 ---
+tab1, tab2 = st.tabs(["貸借対照表 (B/S)", "損益計算書 (P/L)"])
+
+with tab1:
+    col_bs_left, col_bs_right = st.columns(2)
+    with col_bs_left:
+        st.markdown("###### 【資産の部】")
+        ryudo_shisan = input_with_comma("流動資産", data["流動資産"])
+        urio = input_with_comma(" うち売上債権", data["売上債権"])
+        tana = input_with_comma(" うち棚卸資産", data["棚卸資産"])
+        kotei_shisan = input_with_comma("固定資産", data["固定資産"])
+        kurinobe_shisan = input_with_comma("繰延資産", data["繰延資産"])
+        sou_shisan = input_with_comma("総資産", data["総資産"])
+
+    with col_bs_right:
+        st.markdown("###### 【負債・純資産の部】")
+        ryudo_fusai = input_with_comma("流動負債", data["流動負債"])
+        shii = input_with_comma(" うち仕入債務", data["仕入債務"])
+        tanki = input_with_comma(" うち短期借入金", data["短期借入金"])
+        kotei_fusai = input_with_comma("固定負債", data["固定負債"])
+        chouki = input_with_comma(" うち長期借入金", data["長期借入金"])
+        shasai = input_with_comma(" うち社債", data["社債"])
+        jun_shisan = input_with_comma("純資産", data["純資産"])
+
+with tab2:
+    col_pl_left, col_pl_right = st.columns(2)
+    with col_pl_left:
+        uriage = input_with_comma("売上高", data["売上高"])
+        genka = input_with_comma("売上原価", data["売上原価"])
+        sori = input_with_comma("売上総利益", data["売上総利益"])
+        hankanhi = input_with_comma("販管費", data["販管費"])
+        jinkenhi = input_with_comma(" うち人件費", data["人件費"])
+        shokyaku = input_with_comma("減価償却費（全体）", data["減価償却費"])
+    with col_pl_right:
+        eigyo = input_with_comma("営業利益", data["営業利益"])
+        uketsori_risoku = input_with_comma("受取利息・配当金", data["受取利息・配当金"])
+        shiharai_risoku = input_with_comma("支払利息", data["支払利息"])
+        keijo = input_with_comma("経常利益", data["経常利益"])
+        junrieki = input_with_comma("当期純利益", data["当期純利益"])
+
+# シミュレーション計算用の変数を再定義（入力された値を元に計算）
+kizon_kariire = tanki + chouki + shasai
 kani_cf = eigyo + shokyaku
 
 # 3. シミュレーション実行エリア
 st.header("2. 融資可能額・逆算シミュレーション")
+
+# 企業名が入力されていれば表示する
+if company_name:
+    st.markdown(f"#### 🏢 対象企業：{company_name} （{kessan_tsuki} 期）")
 
 col3, col4 = st.columns(2)
 with col3:
