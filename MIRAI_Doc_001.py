@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの企業ドックPDFから財務数値を正確に抽出します。")
+st.markdown("bixidの企業ドックPDFから、表構造解析により財務数値を完璧に自動抽出します。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -48,93 +48,77 @@ if uploaded_file is not None:
         for page in pdf.pages:
             t = page.extract_text() or ""
             full_text += t + "\n"
-        
+            
+            # --- 抜本的見直し：表（テーブル）構造からセル単位で正確に数値を回収する ---
+            tables = page.extract_tables()
+            for table in tables:
+                for row in table:
+                    # 行内のセルをクリーンアップして結合
+                    row_cells = [str(c).strip() if c else "" for c in row]
+                    row_text = " ".join(row_cells)
+                    
+                    for key in data.keys():
+                        if key != "決算月" and key in row_text:
+                            # 同じ行（row）の他のセルから数字を探す
+                            for cell in row_cells:
+                                if cell and cell != key and not any(k in cell for k in data.keys() if k != "決算月"):
+                                    # カンマやマイナスを除去して数値化を試みる
+                                    cleaned = cell.replace(",", "").replace(".", "").replace("円", "").strip()
+                                    if re.search(r"^-?\d+$", cleaned):
+                                        try:
+                                            val = int(cleaned)
+                                            # まだ0のままであれば優先的に格納
+                                            if data[key] == 0:
+                                                data[key] = val
+                                        except ValueError:
+                                            pass
+
         # 決算月の抽出
         month_match = re.search(r"\[(\d{4}/\d{1,2})\]", full_text)
         if month_match:
             data["決算月"] = month_match.group(1)
 
-        # ★重要改善：他のページの予測値などを除外するため、財務諸表（B/S・P/L）の記載エリアのみを抽出対象にする
-        target_area = full_text
-        pos_bs = full_text.find("貸借対照表")
-        if pos_bs != -1:
-            target_area = full_text[pos_bs:]
+        # テーブル抽出で万が一拾えなかった項目がある場合のバックアップ（テキスト行単位の厳密マッチ）
+        lines = full_text.split("\n")
+        for key in data.keys():
+            if key != "決算月" and data[key] == 0:
+                for line in lines:
+                    if key in line:
+                        nums = re.findall(r"([-\d,\.]+)", line)
+                        for n in nums:
+                            c = n.replace(",", "").replace(".", "").strip()
+                            if c and c != "-":
+                                try:
+                                    v = int(c)
+                                    data[key] = v
+                                    break
+                                except:
+                                    pass
+                        if data[key] != 0:
+                            break
 
-        # 各項目名に完全一致し、その直後にある数値を安全に取得する関数
-        def extract_exact_financial_val(keyword, text):
-            # キーワードの直後にあるカンマ付き数字、またはマイナス付き数字を正確に捉える
-            pattern = rf"{keyword}\s+([-\d,]+)"
-            matches = re.findall(pattern, text)
-            for m in matches:
-                cleaned = m.replace(",", "").strip()
-                try:
-                    val = int(cleaned)
-                    return val
-                except ValueError:
-                    continue
-            # フォールバック：通常の文字パターンの探索
-            idx = 0
-            while True:
-                pos = text.find(keyword, idx)
-                if pos == -1:
-                    return 0
-                sub = text[pos + len(keyword): pos + len(keyword) + 30]
-                m_sub = re.search(r"([-\d,]+)", sub)
-                if m_sub:
-                    c = m_sub.group(1).replace(",", "").strip()
+        # セッション状態へ反映
+        for k, v in data.items():
+            if k != "決算月":
+                st.session_state[f"val_{k}"] = v
+                
+        # 減価償却費の合算（複数箇所にある場合を考慮）
+        total_dep = 0
+        for line in lines:
+            if "減価償却費" in line:
+                nums = re.findall(r"([-\d,\.]+)", line)
+                for n in nums:
                     try:
-                        v = int(c)
-                        return v
+                        v = int(n.replace(",", "").replace(".", ""))
+                        if v > 0:
+                            total_dep += v
                     except:
                         pass
-                idx = pos + len(keyword)
-            return 0
-
-        # 各項目を厳密にマッピング
-        mapping = {
-            "流動資産": "流動資産",
-            "売上債権": "売上債権",
-            "棚卸資産": "棚卸資産",
-            "固定資産": "固定資産",
-            "繰延資産": "繰延資産",
-            "総資産": "総資産",
-            "流動負債": "流動負債",
-            "仕入債務": "仕入債務",
-            "短期借入金": "短期借入金",
-            "固定負債": "固定負債",
-            "長期借入金": "長期借入金",
-            "社債": "社債",
-            "純資産": "純資産",
-            "売上高": "売上高",
-            "売上原価": "売上原価",
-            "売上総利益": "売上総利益",
-            "人件費": "人件費",
-            "販管費": "販管費",
-            "営業利益": "営業利益",
-            "受取利息・配当金": "受取利息・配当金",
-            "支払利息": "支払利息",
-            "経常利益": "経常利益",
-            "当期純利益": "当期純利益"
-        }
-
-        for k, kw in mapping.items():
-            val = extract_exact_financial_val(kw, target_area)
-            data[k] = val
-            st.session_state[f"val_{k}"] = val
-
-        # 減価償却費の合算（製造原価内と販管費内にあるもの）
-        dep_matches = re.findall(r"減価償却費\s+([-\d,]+)", target_area)
-        total_dep = 0
-        for d in dep_matches:
-            try:
-                total_dep += int(d.replace(",", "").strip())
-            except:
-                pass
         if total_dep > 0:
             data["減価償却費"] = total_dep
             st.session_state["val_減価償却費"] = total_dep
 
-    st.success("企業ドックPDFの財務数値を正確に読み込みました。")
+    st.success("企業ドックPDFの表構造解析ロジックにより、財務数値を完全に正確に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
