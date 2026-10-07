@@ -1,5 +1,4 @@
 import streamlit as st
-import pdfplumber
 import re
 import pandas as pd
 import plotly.express as px
@@ -11,7 +10,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの企業ドックPDFから、順番通りに正確に財務数値を自動抽出します。")
+st.markdown("bixidのPDFからコピーしたテキストを貼り付けるだけで、財務データを完璧に一発取り込みします。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -31,110 +30,84 @@ def input_with_comma(label, default_value):
 def safe_div(n, d):
     return n / d if d else 0
 
-# 1. PDFアップロード機能
-uploaded_file = st.file_uploader("bixidの企業ドックPDFをアップロードしてください", type="pdf")
-
+# 初期データ
 data = {
-    "決算月": "",
+    "決算月": "2026/3",
     "流動資産": 0, "売上債権": 0, "棚卸資産": 0, "固定資産": 0, "繰延資産": 0, "総資産": 0,
     "流動負債": 0, "仕入債務": 0, "短期借入金": 0, "固定負債": 0, "長期借入金": 0, "社債": 0, "純資産": 0,
     "売上高": 0, "売上原価": 0, "売上総利益": 0, "人件費": 0, "販管費": 0, "減価償却費": 0,
     "営業利益": 0, "受取利息・配当金": 0, "支払利息": 0, "経常利益": 0, "当期純利益": 0
 }
 
-if uploaded_file is not None:
-    with pdfplumber.open(uploaded_file) as pdf:
-        full_text = ""
-        target_text = ""
-        
-        for i, page in enumerate(pdf.pages):
-            t = page.extract_text() or ""
-            full_text += t + "\n"
-            # 財務データ（B/S・P/L）が記載されている後半のページ（主に7ページ目付近）を優先ターゲットにする
-            if "貸借対照表" in t or "損益計算書" in t or i >= 5:
-                target_text += t + "\n"
-        
-        if not target_text:
-            target_text = full_text
+# --- テキスト貼り付けエリアの設置 ---
+st.markdown("### 📋 PDFコピーテキストの貼り付けエリア")
+st.markdown("※ PDFの7ページ目等のテキストをコピーし、下のボックスにそのまま貼り付けてください。")
 
-        # 決算月の抽出
-        month_match = re.search(r"\[(\d{4}/\d{1,2})\]", full_text)
-        if month_match:
-            data["決算月"] = month_match.group(1)
+pasted_text = st.text_area(
+    "ここにコピーしたテキストを貼り付け",
+    value="",
+    height=180,
+    placeholder="例:\n流動資産 27,188,625\n売上債権 4,843,148\n売上高 52,350,366\n..."
+)
 
-        # ★抜本的改善：上から順番に1回ずつ確実に読み込む「シーケンシャル・パーサー」
-        lines = target_text.split("\n")
-        extracted_keys = set()
+if pasted_text:
+    lines = pasted_text.split("\n")
+    
+    # 決算月の検出
+    month_match = re.search(r"(\d{4}/\d{1,2})", pasted_text)
+    if month_match:
+        data["決算月"] = month_match.group(1)
 
-        # PDFのテキスト配置順に並べたマッピングリスト
-        ordered_mapping = [
-            ("流動資産", "流動資産"),
-            ("売上債権", "売上債権"),
-            ("棚卸資産", "棚卸資産"),
-            ("固定資産", "固定資産"),
-            ("繰延資産", "繰延資産"),
-            ("総資産", "総資産"),
-            ("流動負債", "流動負債"),
-            ("仕入債務", "仕入債務"),
-            ("短期借入金", "短期借入金"),
-            ("固定負債", "固定負債"),
-            ("長期借入金", "長期借入金"),
-            ("社債", "社債"),
-            ("純資産", "純資産"),
-            ("売上高", "売上高"),
-            ("売上原価", "売上原価"),
-            ("売上総利益", "売上総利益"),
-            ("人件費", "人件費"),
-            ("減価償却費", "減価償却費"),
-            ("販管費", "販管費"),
-            ("営業利益", "営業利益"),
-            ("受取利息・配当金", "受取利息・配当金"),
-            ("支払利息", "支払利息"),
-            ("経常利益", "経常利益"),
-            ("当期純利益", "当期純利益")
-        ]
+    keyword_map = {
+        "流動資産": "流動資産",
+        "売上債権": "売上債権",
+        "棚卸資産": "棚卸資産",
+        "固定資産": "固定資産",
+        "繰延資産": "繰延資産",
+        "総資産": "総資産",
+        "流動負債": "流動負債",
+        "仕入債務": "仕入債務",
+        "短期借入金": "短期借入金",
+        "固定負債": "固定負債",
+        "長期借入金": "長期借入金",
+        "社債": "社債",
+        "純資産": "純資産",
+        "売上高": "売上高",
+        "売上原価": "売上原価",
+        "売上総利益": "売上総利益",
+        "人件費": "人件費",
+        "販管費": "販管費",
+        "営業利益": "営業利益",
+        "受取利息・配当金": "受取利息・配当金",
+        "支払利息": "支払利息",
+        "経常利益": "経常利益",
+        "当期純利益": "当期純利益"
+    }
 
-        for line in lines:
-            for kw, dict_key in ordered_mapping:
-                if dict_key in extracted_keys:
-                    continue  # 既に取得済みの項目は二度と上書きしない
-                
-                if kw in line:
-                    # 行内からマイナスやカンマを含む数値を抽出
-                    nums = re.findall(r"([-\d,\.]+)", line)
-                    if nums:
-                        # 行内の最後の数値を金額として採用
-                        for n_str in reversed(nums):
-                            cleaned = n_str.replace(",", "").replace(".", "").strip()
-                            if cleaned and cleaned != "-":
-                                try:
-                                    val = int(cleaned)
-                                    data[dict_key] = val
-                                    extracted_keys.add(dict_key)
-                                    break
-                                except ValueError:
-                                    continue
-
-        # 減価償却費の合算（複数箇所にある場合を正しく合計）
-        total_dep = 0
-        for line in lines:
-            if "減価償却費" in line:
+    for line in lines:
+        for kw, dict_key in keyword_map.items():
+            if kw in line:
                 nums = re.findall(r"([-\d,\.]+)", line)
-                for n in nums:
-                    c = n.replace(",", "").replace(".", "").strip()
-                    if c.isdigit():
-                        v = int(c)
-                        if v > 0:
-                            total_dep += v
-        if total_dep > 0:
-            data["減価償却費"] = total_dep
+                if nums:
+                    for n_str in reversed(nums):
+                        cleaned = n_str.replace(",", "").replace(".", "").strip()
+                        if cleaned and cleaned != "-":
+                            try:
+                                val = int(cleaned)
+                                if dict_key == "減価償却費":
+                                    data["減価償却費"] += val
+                                else:
+                                    data[dict_key] = val
+                                break
+                            except ValueError:
+                                continue
 
-        # セッション状態へ正確に反映
-        for k, v in data.items():
-            if k != "決算月":
-                st.session_state[f"val_{k}"] = v
+    # セッション状態へ反映
+    for k, v in data.items():
+        if k != "決算月":
+            st.session_state[f"val_{k}"] = v
 
-    st.success("企業ドックPDFの財務数値を正確に読み込みました。")
+    st.success("✅ 貼り付けられたテキストから財務データを完全に正確に読み込みました！")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
@@ -142,7 +115,7 @@ tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財
 with tab1:
     col_info1, col_info2, col_info3 = st.columns(3)
     with col_info1: company_name = st.text_input("企業名", value="株式会社〇〇")
-    with col_info2: kessan_tsuki = st.text_input("決算月", value=data["決算月"] if data["決算月"] else "2026/3")
+    with col_info2: kessan_tsuki = st.text_input("決算月", value=data["決算月"])
     with col_info3: jugyoin = st.number_input("従業員数（名）", min_value=1, value=10)
     
     col_bs, col_pl = st.columns(2)
