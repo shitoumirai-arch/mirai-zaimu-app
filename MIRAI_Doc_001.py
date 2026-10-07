@@ -4,6 +4,7 @@ import re
 import pandas as pd
 import plotly.express as px
 import io
+import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
@@ -52,27 +53,27 @@ if uploaded_file is not None:
         if month_match:
             data["決算月"] = month_match.group(1)
         
-        # 強化された数値抽出関数（キーワードの近くにある数値を探索して拾う）
-        def extract_val_robust(keyword, text):
-            # キーワード周辺のテキストから、カンマやマイナス付きの数値をすべて探す
-            pos = text.find(keyword)
-            if pos != -1:
-                # キーワード以降のテキストを切り出し
-                sub_text = text[pos:pos+100]
+        # 改行や空白を無視して、項目名と結びついた数値を正確に取得する堅牢な関数
+        def extract_val_safe(keyword, text):
+            # キーワードが出現する位置を探す
+            idx = 0
+            while True:
+                pos = text.find(keyword, idx)
+                if pos == -1:
+                    break
+                # キーワード以降の文字列を切り出して数値を探す
+                sub_text = text[pos + len(keyword):pos + len(keyword) + 40]
                 numbers = re.findall(r"([-\d,\.]+)", sub_text)
                 for n in numbers:
-                    # キーワード自体の文字（数字が含まれる場合）を除外し、純粋な金額を判定
                     cleaned = n.replace(",", "").replace(".", "")
                     try:
                         val = int(cleaned)
-                        # 0以外の数値、または明確に0である場合
-                        if val != 0 or "0" in n:
-                            return val
+                        return val
                     except ValueError:
                         continue
+                idx = pos + len(keyword)
             return 0
 
-        # 各項目を個別に正確に抽出
         keywords_map = {
             "流動資産": "流動資産",
             "売上債権": "売上債権",
@@ -100,11 +101,11 @@ if uploaded_file is not None:
         }
 
         for key, kw in keywords_map.items():
-            val = extract_val_robust(kw, target_text)
+            val = extract_val_safe(kw, target_text)
             data[key] = val
             st.session_state[f"val_{key}"] = val
                     
-        # 減価償却費の合算（複数箇所にあるため全て拾う）
+        # 減価償却費の合算
         dep_matches = re.findall(r"減価償却費\s*([-\d,\.]+)", target_text)
         total_dep = 0
         for d in dep_matches:
@@ -116,7 +117,7 @@ if uploaded_file is not None:
             data["減価償却費"] = total_dep
             st.session_state["val_減価償却費"] = total_dep
             
-    st.success("企業ドックPDFからB/S・P/Lの数値を正常に読み込みました。")
+    st.success("企業ドックPDFからB/S・P/Lの全数値を正常に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
@@ -253,7 +254,7 @@ with tab3:
     else:
         st.success("現状の収益力でも十分に審査のテーブルに乗る可能性が高いです。具体的な事業計画書に落とし込みましょう。")
 
-# --- スタイリッシュなExcel生成・ダウンロード機能（エラー修正版） ---
+# --- スタイリッシュなExcel生成・ダウンロード機能 ---
 st.markdown("---")
 st.markdown("### 📥 スタイリッシュ診断レポート（Excel）ダウンロード")
 
@@ -316,7 +317,6 @@ with pd.ExcelWriter(output, engine='openpyxl') as writer:
     })
     df_opinion.to_excel(writer, sheet_name="総合所見", index=False)
 
-# openpyxlによる安全なスタイル適用
 excel_data = output.getvalue()
 wb = openpyxl.load_workbook(io.BytesIO(excel_data))
 
