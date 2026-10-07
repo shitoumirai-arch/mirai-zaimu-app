@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの企業ドックPDFから財務数値を完璧に自動抽出します。")
+st.markdown("bixidの企業ドックPDFから、順番通りに正確に財務数値を自動抽出します。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -45,76 +45,77 @@ data = {
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
         full_text = ""
-        pl_bs_text = ""
+        target_text = ""
         
         for i, page in enumerate(pdf.pages):
             t = page.extract_text() or ""
             full_text += t + "\n"
-            # 7ページ目付近、または「貸借対照表」「損益計算書」が含まれるページをターゲットにする
+            # 財務データ（B/S・P/L）が記載されている後半のページ（主に7ページ目付近）を優先ターゲットにする
             if "貸借対照表" in t or "損益計算書" in t or i >= 5:
-                pl_bs_text += t + "\n"
+                target_text += t + "\n"
         
-        # もし見つからなければ全体を対象にする
-        if not pl_bs_text:
-            pl_bs_text = full_text
+        if not target_text:
+            target_text = full_text
 
         # 決算月の抽出
         month_match = re.search(r"\[(\d{4}/\d{1,2})\]", full_text)
         if month_match:
             data["決算月"] = month_match.group(1)
 
-        # ★ご提示いただいたエクセルのように「科目名」と「数値」が同じ行にあるテキストを綺麗に解析する決定版パーサー
-        lines = pl_bs_text.split("\n")
-        
-        # 勘定科目と辞書キーのマッピング定義
-        keyword_map = {
-            "流動資産": "流動資産",
-            "売上債権": "売上債権",
-            "棚卸資産": "棚卸資産",
-            "固定資産": "固定資産",
-            "繰延資産": "繰延資産",
-            "総資産": "総資産",
-            "流動負債": "流動負債",
-            "仕入債務": "仕入債務",
-            "短期借入金": "短期借入金",
-            "固定負債": "固定負債",
-            "長期借入金": "長期借入金",
-            "社債": "社債",
-            "純資産": "純資産",
-            "売上高": "売上高",
-            "売上原価": "売上原価",
-            "売上総利益": "売上総利益",
-            "人件費": "人件費",
-            "販管費": "販管費",
-            "営業利益": "営業利益",
-            "受取利息・配当金": "受取利息・配当金",
-            "支払利息": "支払利息",
-            "経常利益": "経常利益",
-            "当期純利益": "当期純利益"
-        }
+        # ★抜本的改善：上から順番に1回ずつ確実に読み込む「シーケンシャル・パーサー」
+        lines = target_text.split("\n")
+        extracted_keys = set()
+
+        # PDFのテキスト配置順に並べたマッピングリスト
+        ordered_mapping = [
+            ("流動資産", "流動資産"),
+            ("売上債権", "売上債権"),
+            ("棚卸資産", "棚卸資産"),
+            ("固定資産", "固定資産"),
+            ("繰延資産", "繰延資産"),
+            ("総資産", "総資産"),
+            ("流動負債", "流動負債"),
+            ("仕入債務", "仕入債務"),
+            ("短期借入金", "短期借入金"),
+            ("固定負債", "固定負債"),
+            ("長期借入金", "長期借入金"),
+            ("社債", "社債"),
+            ("純資産", "純資産"),
+            ("売上高", "売上高"),
+            ("売上原価", "売上原価"),
+            ("売上総利益", "売上総利益"),
+            ("人件費", "人件費"),
+            ("減価償却費", "減価償却費"),
+            ("販管費", "販管費"),
+            ("営業利益", "営業利益"),
+            ("受取利息・配当金", "受取利息・配当金"),
+            ("支払利息", "支払利息"),
+            ("経常利益", "経常利益"),
+            ("当期純利益", "当期純利益")
+        ]
 
         for line in lines:
-            for kw, dict_key in keyword_map.items():
-                # 行の中にキーワードが含まれている場合
+            for kw, dict_key in ordered_mapping:
+                if dict_key in extracted_keys:
+                    continue  # 既に取得済みの項目は二度と上書きしない
+                
                 if kw in line:
-                    # キーワード以降、または行全体から数字（カンマ・マイナス含む）をすべて抽出
+                    # 行内からマイナスやカンマを含む数値を抽出
                     nums = re.findall(r"([-\d,\.]+)", line)
                     if nums:
-                        # 最後の数値、あるいは数値らしいものを金額として採用
+                        # 行内の最後の数値を金額として採用
                         for n_str in reversed(nums):
                             cleaned = n_str.replace(",", "").replace(".", "").strip()
-                            # 妥当な金額の長さであれば採用
                             if cleaned and cleaned != "-":
                                 try:
                                     val = int(cleaned)
-                                    # まだ値が入っていない（0の）場合、またはより確実な値として格納
-                                    if data[dict_key] == 0:
-                                        data[dict_key] = val
+                                    data[dict_key] = val
+                                    extracted_keys.add(dict_key)
                                     break
                                 except ValueError:
                                     continue
 
-        # 減価償却費の合算（製造原価・販管費内など複数ある場合を網羅）
+        # 減価償却費の合算（複数箇所にある場合を正しく合計）
         total_dep = 0
         for line in lines:
             if "減価償却費" in line:
@@ -128,12 +129,12 @@ if uploaded_file is not None:
         if total_dep > 0:
             data["減価償却費"] = total_dep
 
-        # セッション状態へ完全に反映
+        # セッション状態へ正確に反映
         for k, v in data.items():
             if k != "決算月":
                 st.session_state[f"val_{k}"] = v
 
-    st.success("企業ドックPDFから財務数値を完全に正確に読み込みました。")
+    st.success("企業ドックPDFの財務数値を正確に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
