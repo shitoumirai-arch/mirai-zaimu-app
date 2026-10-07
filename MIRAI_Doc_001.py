@@ -4,11 +4,13 @@ import re
 import pandas as pd
 import plotly.express as px
 import io
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
 
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("財務数値を入力・修正すると、銀行目線での分析指標とレーダーチャートが自動生成されます。下部のボタンから、分析結果をExcelファイルとしてダウンロードできます。")
+st.markdown("財務データの入力・実態修正、および銀行OBによる所見の入力を行い、スタイリッシュなExcelレポートをダウンロードできます。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -82,10 +84,10 @@ if uploaded_file is not None:
     st.success("PDFの読み込みが完了しました。")
 
 # メインタブの作成
-tab1, tab2, tab3 = st.tabs(["📝 1.財務データ入力・修正", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
+tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
 
 with tab1:
-    st.markdown("###### 実態修正（役員借入金の振替など）を行うと、分析結果やグラフが自動で改善されます。")
+    st.markdown("###### 実態修正や、銀行OBとしての総合所見・今後の課題をここに入力してください。")
     col_info1, col_info2, col_info3 = st.columns(3)
     with col_info1: company_name = st.text_input("企業名", value="株式会社〇〇")
     with col_info2: kessan_tsuki = st.text_input("決算月", value=data["決算月"] if data["決算月"] else "2026/3")
@@ -117,6 +119,14 @@ with tab1:
         eigyo = input_with_comma("営業利益", data["営業利益"])
         keijo = input_with_comma("経常利益", data["経常利益"])
         junrieki = input_with_comma("当期純利益", data["当期純利益"])
+
+    st.markdown("---")
+    st.markdown("#### ✍️ 診断者（銀行OB）の総合所見・今後の課題")
+    diagnosis_opinion = st.text_area(
+        "ここに銀行OBとしての評価、改善に向けたアドバイス、提案内容などを自由に記載してください（Excelに出力されます）。",
+        value="【現状評価】\n表面上は債務超過であるが、役員借入金等を考慮した実態ベースでは正常先の範疇にある。\n\n【今後の課題・対策】\n来期の追加融資を見据え、売上高経常利益率の改善および固定費の見直しが急務である。",
+        height=150
+    )
 
 # --- 計算ロジック ---
 kizon_kariire = tanki + chouki + shasai
@@ -211,12 +221,11 @@ with tab3:
     else:
         st.success("現状の収益力でも十分に審査のテーブルに乗る可能性が高いです。具体的な事業計画書に落とし込みましょう。")
 
-# --- Excelダウンロード機能の追加 ---
+# --- スタイリッシュなExcel生成・ダウンロード機能 ---
 st.markdown("---")
-st.markdown("### 📥 診断レポートのExcelダウンロード")
-st.markdown("入力された財務データ、12の分析指標、および借入余力シミュレーションの結果をまとめたExcelファイルをダウンロードできます。")
+st.markdown("### 📥 スタイリッシュ診断レポート（Excel）ダウンロード")
+st.markdown("入力されたデータ、分析指標、シミュレーション結果に加え、**銀行OBの総合所見**が美しくデザインされたExcelファイルとして出力されます。")
 
-# Excelファイルをメモリ上で作成
 output = io.BytesIO()
 with pd.ExcelWriter(output, engine='openpyxl') as writer:
     # 1. 基本・BS/PLデータ
@@ -273,11 +282,80 @@ with pd.ExcelWriter(output, engine='openpyxl') as writer:
     })
     df_sim.to_excel(writer, sheet_name="借入余力・逆算シミュレーション", index=False)
 
+    # 4. 銀行OBの総合所見
+    df_opinion = pd.DataFrame({
+        "項目": ["対象企業", "決算月", "銀行OB 総合所見・今後の課題"],
+        "内容": [company_name, kessan_tsuki, diagnosis_opinion]
+    })
+    df_opinion.to_excel(writer, sheet_name="総合所見", index=False)
+
 excel_data = output.getvalue()
 
+# --- openpyxlを使ったスタイリッシュな書式適用 ---
+excel_io = io.BytesIO(excel_data)
+import openpyxl
+wb = openpyxl.load_workbook(excel_io)
+
+# デザイン定義
+header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # ネイビー
+header_font = Font(name="Meiryo", size=11, bold=True, color="FFFFFF")
+cell_font = Font(name="Meiryo", size=10)
+stripe_fill = PatternFill(start_color="F9FBFD", end_color="F9FBFD", fill_type="solid") # 薄いブルーグレー
+border_thin = Border(
+    left=Side(style='thin', color='D9D9D9'),
+    right=Side(style='thin', color='D9D9D9'),
+    top=Side(style='thin', color='D9D9D9'),
+    bottom=Side(style='thin', color='D9D9D9')
+)
+
+for sheet in wb.sheetnames:
+    ws = wb[sheet]
+    # 1行目（ヘッダー）の装飾
+    for col_num in range(1, ws.max_column + 1):
+        cell = ws.cell(row=1, column=col_num)
+        cell.fill = header_fill
+        cell.font = header_font
+        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.border = border_thin
+    ws.row_dimensions[1].height = 25
+
+    # データ行の装飾
+    for row_num in range(2, ws.max_row + 1):
+        ws.row_dimensions[row_num].height = 20
+        is_stripe = (row_num % 2 == 0)
+        for col_num in range(1, ws.max_column + 1):
+            cell = ws.cell(row=row_num, column=col_num)
+            cell.font = cell_font
+            cell.border = border_thin
+            if is_stripe:
+                cell.fill = stripe_fill
+            # 数値列や金額列は右寄せ、他は左寄せ
+            if col_num > 1 and sheet != "総合所見":
+                cell.alignment = Alignment(horizontal="right", vertical="center")
+            else:
+                cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    # 列幅の自動調整
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            if cell.value:
+                val_str = str(cell.value)
+                # 改行が含まれている場合は最長の行を基準にする
+                lines = val_str.split('\n')
+                for line in lines:
+                    if len(line) > max_len:
+                        max_len = len(line)
+        ws.column_dimensions[col_letter].width = max(max_len * 2 + 4, 15)
+
+final_output = io.BytesIO()
+wb.save(final_output)
+final_excel_data = final_output.getvalue()
+
 st.download_button(
-    label="📊 診断結果をExcelでダウンロード",
-    data=excel_data,
-    file_name=f"財務格付け診断_{company_name}.xlsx",
+    label="📊 スタイリッシュなExcelレポートをダウンロード",
+    data=final_excel_data,
+    file_name=f"財務格付け診断レポート_{company_name}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
