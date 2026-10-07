@@ -44,68 +44,68 @@ data = {
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
         target_text = ""
-        # 5ページ目以降（B/S・P/Lの記載があるページ）を対象にする
         for page in pdf.pages:
             p_text = page.extract_text() or ""
-            if "貸借対照表" in p_text or "損益計算書" in p_text:
-                target_text += p_text + "\n"
-        
-        if not target_text:
-            for page in pdf.pages:
-                target_text += (page.extract_text() or "") + "\n"
+            target_text += p_text + "\n"
         
         month_match = re.search(r"\[(\d{4}/\d{1,2})\]", target_text)
         if month_match:
             data["決算月"] = month_match.group(1)
         
-        # どんな空白や記号が挟まっていても数値を確実に捉える柔軟な正規表現関数
-        def extract_val(keyword, text):
-            # キーワードの直後にある数値（マイナスやカンマ、ピリオドを含む）を抽出
-            pattern = rf"{keyword}[\s\:\u3000\|\.\w]*?([-\d,\.]+)"
-            matches = re.findall(pattern, text)
-            for m in matches:
-                # 綺麗に数値化できるかテスト
-                cleaned = m.replace(",", "").replace(".", "")
-                try:
-                    return int(cleaned)
-                except ValueError:
-                    continue
+        # 強化された数値抽出関数（キーワードの近くにある数値を探索して拾う）
+        def extract_val_robust(keyword, text):
+            # キーワード周辺のテキストから、カンマやマイナス付きの数値をすべて探す
+            pos = text.find(keyword)
+            if pos != -1:
+                # キーワード以降のテキストを切り出し
+                sub_text = text[pos:pos+100]
+                numbers = re.findall(r"([-\d,\.]+)", sub_text)
+                for n in numbers:
+                    # キーワード自体の文字（数字が含まれる場合）を除外し、純粋な金額を判定
+                    cleaned = n.replace(",", "").replace(".", "")
+                    try:
+                        val = int(cleaned)
+                        # 0以外の数値、または明確に0である場合
+                        if val != 0 or "0" in n:
+                            return val
+                    except ValueError:
+                        continue
             return 0
 
-        # 各項目を抽出
-        data["流動資産"] = extract_val("流動資産", target_text)
-        data["売上債権"] = extract_val("売上債権", target_text)
-        data["棚卸資産"] = extract_val("棚卸資産", target_text)
-        data["固定資産"] = extract_val("固定資産", target_text)
-        data["繰延資産"] = extract_val("繰延資産", target_text)
-        data["総資産"] = extract_val("総資産", target_text)
-        
-        data["流動負債"] = extract_val("流動負債", target_text)
-        data["仕入債務"] = extract_val("仕入債務", target_text)
-        data["短期借入金"] = extract_val("短期借入金", target_text)
-        data["固定負債"] = extract_val("固定負債", target_text)
-        data["長期借入金"] = extract_val("長期借入金", target_text)
-        data["社債"] = extract_val("社債", target_text)
-        data["純資産"] = extract_val("純資産", target_text)
-        
-        data["売上高"] = extract_val("売上高", target_text)
-        data["売上原価"] = extract_val("売上原価", target_text)
-        data["売上総利益"] = extract_val("売上総利益", target_text)
-        data["人件費"] = extract_val("人件費", target_text)
-        data["販管費"] = extract_val("販管費", target_text)
-        data["営業利益"] = extract_val("営業利益", target_text)
-        data["受取利息・配当金"] = extract_val("受取利息・配当金", target_text)
-        data["支払利息"] = extract_val("支払利息", target_text)
-        data["経常利益"] = extract_val("経常利益", target_text)
-        data["当期純利益"] = extract_val("当期純利益", target_text)
-        
-        # セッション状態に反映
-        for k, v in data.items():
-            if k != "決算月":
-                st.session_state[f"val_{k}"] = v
-                
-        # 減価償却費の合算
-        dep_matches = re.findall(r"減価償却費[\s\:\u3000\|\.\w]*?([-\d,\.]+)", target_text)
+        # 各項目を個別に正確に抽出
+        keywords_map = {
+            "流動資産": "流動資産",
+            "売上債権": "売上債権",
+            "棚卸資産": "棚卸資産",
+            "固定資産": "固定資産",
+            "繰延資産": "繰延資産",
+            "総資産": "総資産",
+            "流動負債": "流動負債",
+            "仕入債務": "仕入債務",
+            "短期借入金": "短期借入金",
+            "固定負債": "固定負債",
+            "長期借入金": "長期借入金",
+            "社債": "社債",
+            "純資産": "純資産",
+            "売上高": "売上高",
+            "売上原価": "売上原価",
+            "売上総利益": "売上総利益",
+            "人件費": "人件費",
+            "販管費": "販管費",
+            "営業利益": "営業利益",
+            "受取利息・配当金": "受取利息・配当金",
+            "支払利息": "支払利息",
+            "経常利益": "経常利益",
+            "当期純利益": "当期純利益"
+        }
+
+        for key, kw in keywords_map.items():
+            val = extract_val_robust(kw, target_text)
+            data[key] = val
+            st.session_state[f"val_{key}"] = val
+                    
+        # 減価償却費の合算（複数箇所にあるため全て拾う）
+        dep_matches = re.findall(r"減価償却費\s*([-\d,\.]+)", target_text)
         total_dep = 0
         for d in dep_matches:
             try:
@@ -116,7 +116,7 @@ if uploaded_file is not None:
             data["減価償却費"] = total_dep
             st.session_state["val_減価償却費"] = total_dep
             
-    st.success("B/SおよびP/Lの全数値を高精度に読み込みました。")
+    st.success("企業ドックPDFからB/S・P/Lの数値を正常に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
@@ -253,7 +253,7 @@ with tab3:
     else:
         st.success("現状の収益力でも十分に審査のテーブルに乗る可能性が高いです。具体的な事業計画書に落とし込みましょう。")
 
-# --- スタイリッシュなExcel生成・ダウンロード機能 ---
+# --- スタイリッシュなExcel生成・ダウンロード機能（エラー修正版） ---
 st.markdown("---")
 st.markdown("### 📥 スタイリッシュ診断レポート（Excel）ダウンロード")
 
@@ -316,9 +316,9 @@ with pd.ExcelWriter(output, engine='openpyxl') as writer:
     })
     df_opinion.to_excel(writer, sheet_name="総合所見", index=False)
 
+# openpyxlによる安全なスタイル適用
 excel_data = output.getvalue()
-excel_io = io.BytesIO(excel_data)
-wb = openpyxl.load_workbook(excel_io)
+wb = openpyxl.load_workbook(io.BytesIO(excel_data))
 
 header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
 header_font = Font(name="Meiryo", size=11, bold=True, color="FFFFFF")
