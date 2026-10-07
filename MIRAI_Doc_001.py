@@ -3,39 +3,21 @@ import pdfplumber
 import re
 import pandas as pd
 import plotly.express as px
+import io
 
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
-# --- 印刷用（PDF保存用）のCSSスタイル定義 ---
-st.markdown("""
-<style>
-@media print {
-    /* 印刷時に隠す要素（サイドバー、ファイルアップローダー、タブ、ボタン類） */
-    header, [data-testid="stSidebar"], .stFileUploader, .stTabs, .stButton {
-        display: none !important;
-    }
-    body {
-        background-color: white;
-        color: black;
-    }
-}
-</style>
-""", unsafe_allow_html=True)
+st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
+st.markdown("財務数値を入力・修正すると、銀行目線での分析指標とレーダーチャートが自動生成されます。下部のボタンから、分析結果をExcelファイルとしてダウンロードできます。")
 
-st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーションレポート")
-st.markdown("財務数値を入力・修正すると、銀行目線での分析指標とレーダーチャートが自動生成されます。面談時はそのままブラウザからPDF保存・印刷が可能です。")
-
-# --- 補助関数：カンマ区切りの入力欄（修正版） ---
+# --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
-    # セッション状態を使って値を保持・フォーマットする
     key_str = f"val_{label}"
     if key_str not in st.session_state:
         st.session_state[key_str] = default_value
     
-    # テキスト入力
     val_str = st.text_input(label, value=f"{st.session_state[key_str]:,}")
     
-    # 入力値を数値に変換してセッションに保存
     try:
         clean_val = int(val_str.replace(",", "").replace(" ", "").replace(" ", ""))
         st.session_state[key_str] = clean_val
@@ -43,7 +25,6 @@ def input_with_comma(label, default_value):
     except ValueError:
         return st.session_state[key_str]
 
-# --- ゼロ割りを防ぐ ---
 def safe_div(n, d):
     return n / d if d else 0
 
@@ -87,10 +68,8 @@ if uploaded_file is not None:
             match = re.search(pattern, text)
             if match:
                 try:
-                    val_str = match.group(1).replace(",", "").replace(".", "")
-                    val_int = int(val_str)
+                    val_int = int(match.group(1).replace(",", "").replace(".", ""))
                     data[key] = val_int
-                    # セッション状態も初期化
                     st.session_state[f"val_{key}"] = val_int
                 except ValueError:
                     pass
@@ -205,7 +184,8 @@ with tab3:
     col3_1, col3_2 = st.columns(2)
     with col3_1:
         st.subheader("【ブロック1】運転資金枠チェック")
-        st.metric(label="正常運転資金（短期枠）", value=f"{(urio + tana - shii):,} 円")
+        unten_shikin = urio + tana - shii
+        st.metric(label="正常運転資金（短期枠）", value=f"{unten_shikin:,} 円")
         
         st.subheader("【ブロック2】CF借入余力（現状の限界）")
         kyoyou_nensu = st.selectbox("銀行の許容償還年数", [7, 10, 15], index=1)
@@ -226,14 +206,78 @@ with tab3:
     st.markdown("---")
     st.markdown("💬 **銀行OBからの処方箋**")
     if mokuhyo_eigyo > eigyo:
-        st.warning(f"社長、現状のままでは追加融資の稟議は通りません。融資を引き出すためには、来期の営業利益を今の状態から **{int(mokuhyo_eigyo - eigyo):,}円 改善** させる計画書が必要です。我々と一緒に、この利益を生み出すための具体的な経営改善計画を作りましょう。")
+        kaizen_gaku = int(mokuhyo_eigyo - eigyo)
+        st.warning(f"社長、現状のままでは追加融資の稟議は通りません。融資を引き出すためには、来期の営業利益を今の状態から **{kaizen_gaku:,}円 改善** させる計画書が必要です。我々と一緒に、この利益を生み出すための具体的な経営改善計画を作りましょう。")
     else:
         st.success("現状の収益力でも十分に審査のテーブルに乗る可能性が高いです。具体的な事業計画書に落とし込みましょう。")
 
-# --- PDF保存・印刷案内エリア ---
+# --- Excelダウンロード機能の追加 ---
 st.markdown("---")
-st.markdown("### 🖨️ 社長への提案書（PDF）出力について")
-st.info("面談時にこの画面を社長に提示し、そのままPDFとして保存・印刷して渡すことができます。\n\n"
-        "**【操作手順】**\n"
-        "ブラウザの印刷メニュー（Windowsなら `Ctrl + P`、Macなら `Cmd + P`）を開き、送信先を **「PDFに保存」** に設定してください。\n"
-        "※余分な入力欄やボタンは自動的に消え、きれいな診断レポートとして印刷されます。")
+st.markdown("### 📥 診断レポートのExcelダウンロード")
+st.markdown("入力された財務データ、12の分析指標、および借入余力シミュレーションの結果をまとめたExcelファイルをダウンロードできます。")
+
+# Excelファイルをメモリ上で作成
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine='openpyxl') as writer:
+    # 1. 基本・BS/PLデータ
+    df_bs_pl = pd.DataFrame({
+        "項目": [
+            "企業名", "決算月", "従業員数",
+            "流動資産", "  うち売上債権", "  うち棚卸資産", "固定資産", "総資産",
+            "流動負債", "  うち仕入債務", "  うち短期借入金", "固定負債", "  うち長期借入金", "  うち社債", "純資産",
+            "売上高", "売上総利益(粗利)", "  うち人件費", "  うち減価償却費", "営業利益", "経常利益", "当期純利益"
+        ],
+        "金額 (円)": [
+            company_name, kessan_tsuki, jugyoin,
+            ryudo_shisan, urio, tana, kotei_shisan, sou_shisan,
+            ryudo_fusai, shii, tanki, kotei_fusai, chouki, shasai, jun_shisan,
+            uriage, sori, jinkenhi, shokyaku, eigyo, keijo, junrieki
+        ]
+    })
+    df_bs_pl.to_excel(writer, sheet_name="財務データ", index=False)
+    
+    # 2. 財務分析指標
+    df_analysis = pd.DataFrame({
+        "指標カテゴリ": ["収益性", "収益性", "収益性", "資金力", "資金力", "資金力", "安全性", "安全性", "安全性", "効率性", "効率性", "効率性"],
+        "指標名": [
+            "ROA", "売上高営業利益率", "売上高当期純利益率",
+            "簡易キャッシュフロー", "簡易債務償還年数", "借入金月商倍率",
+            "流動比率", "自己資本比率", "固定長期適合率",
+            "一人当たり売上高", "労働分配率", "平均年収"
+        ],
+        "数値": [
+            f"{roa:.1f}%", f"{eigyo_rieki_ritsu:.1f}%", f"{junrieki_ritsu:.1f}%",
+            f"{kani_cf:,} 円", f"{shokan_nensu:.1f} 年" if kani_cf > 0 else "測定不能", f"{gessho_bairitsu:.1f} ヶ月",
+            f"{ryudo_hiritsu:.1f}%", f"{jikoshihon_hiritsu:.1f}%", f"{kotei_choki_hiritsu:.1f}%",
+            f"{int(uriage_per_head):,} 円", f"{rodou_bunpai:.1f}%", f"{int(nenshu_per_head):,} 円"
+        ]
+    })
+    df_analysis.to_excel(writer, sheet_name="財務分析指標", index=False)
+    
+    # 3. 借入余力シミュレーション
+    df_sim = pd.DataFrame({
+        "シミュレーション項目": [
+            "正常運転資金（短期枠）",
+            "現在の稼ぐ力から見た借入余力（CF基準）",
+            "追加希望融資額",
+            "希望返済期間",
+            "来期に必要な営業利益（必達目標）"
+        ],
+        "結果": [
+            f"{unten_shikin:,} 円",
+            f"{cf_yoryoku:,} 円",
+            f"{kibou_gaku:,} 円",
+            f"{hensai_kikan} 年",
+            f"{int(mokuhyo_eigyo):,} 円"
+        ]
+    })
+    df_sim.to_excel(writer, sheet_name="借入余力・逆算シミュレーション", index=False)
+
+excel_data = output.getvalue()
+
+st.download_button(
+    label="📊 診断結果をExcelでダウンロード",
+    data=excel_data,
+    file_name=f"財務格付け診断_{company_name}.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
