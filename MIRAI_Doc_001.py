@@ -11,7 +11,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("bixidの企業ドックPDFから、財務数値を完璧に自動抽出します。")
+st.markdown("bixidの企業ドックPDFから財務数値を正確に抽出します。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -44,81 +44,81 @@ data = {
 
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
-        all_lines = []
+        full_text = ""
         for page in pdf.pages:
-            # 各行ごとにテキストを綺麗に抽出
-            text_lines = page.extract_text(layout=True).split('\n')
-            for line in text_lines:
-                all_lines.append(line)
+            t = page.extract_text() or ""
+            full_text += t + "\n"
         
         # 決算月の抽出
-        for line in all_lines:
-            m = re.search(r"\[(\d{4}/\d{1,2})\]", line)
-            if m:
-                data["決算月"] = m.group(1)
-                break
+        month_match = re.search(r"\[(\d{4}/\d{1,2})\]", full_text)
+        if month_match:
+            data["決算月"] = month_match.group(1)
 
-        # 行単位で項目名と数値を完全一致させるパーサー
-        def parse_financial_data(lines, target_dict):
-            for line in lines:
-                # 行からすべての数字（カンマやマイナス含む）を抽出
-                # 例: "売上債権 4,843,148"
-                for key in target_dict.keys():
-                    if key == "決算月":
-                        continue
-                    if key in line:
-                        # キーワードが含まれている行から数値を探す
-                        # キーワードより後ろにある数字、または行内の数字を抽出
-                        numbers = re.findall(r"([-\d,\.]+)", line)
-                        for num_str in numbers:
-                            cleaned = num_str.replace(",", "").replace(".", "").strip()
-                            try:
-                                val = int(cleaned)
-                                # 妥当な金額（0以外の数値、または明示的な0）なら採用
-                                if val != 0 or len(cleaned) > 0:
-                                    target_dict[key] = val
-                            except ValueError:
-                                continue
+        # 項目名ごとに、直後（50文字以内）に出現する数値を確実に1つだけ抜き出す安全なパーサー
+        def extract_specific_value(keyword, text):
+            pos = 0
+            while True:
+                idx = text.find(keyword, pos)
+                if idx == -1:
+                    return 0
+                # キーワードの後ろのテキストを切り出し
+                sub = text[idx + len(keyword): idx + len(keyword) + 40]
+                # 最初に見つかった数値（マイナスやカンマを含む）をターゲットにする
+                match = re.search(r"([-\d,\.]+)", sub)
+                if match:
+                    num_str = match.group(1).replace(",", "").replace(".", "").strip()
+                    try:
+                        val = int(num_str)
+                        return val
+                    except ValueError:
+                        pass
+                pos = idx + len(keyword)
 
-        parse_financial_data(all_lines, data)
+        # 各項目を個別に正確にマッピング
+        data["流動資産"] = extract_specific_value("流動資産", full_text)
+        data["売上債権"] = extract_specific_value("売上債権", full_text)
+        data["棚卸資産"] = extract_value = extract_specific_value("棚卸資産", full_text)
+        data["固定資産"] = extract_specific_value("固定資産", full_text)
+        data["繰延資産"] = extract_specific_value("繰延資産", full_text)
+        data["総資産"] = extract_specific_value("総資産", full_text)
+        
+        data["流動負債"] = extract_specific_value("流動負債", full_text)
+        data["仕入債務"] = extract_specific_value("仕入債務", full_text)
+        data["短期借入金"] = extract_specific_value("短期借入金", full_text)
+        data["固定負債"] = extract_specific_value("固定負債", full_text)
+        data["長期借入金"] = extract_specific_value("長期借入金", full_text)
+        data["社債"] = extract_specific_value("社債", full_text)
+        data["純資産"] = extract_specific_value("純資産", full_text)
+        
+        data["売上高"] = extract_specific_value("売上高", full_text)
+        data["売上原価"] = extract_specific_value("売上原価", full_text)
+        data["売上総利益"] = extract_specific_value("売上総利益", full_text)
+        data["人件費"] = extract_specific_value("人件費", full_text)
+        data["販管費"] = extract_specific_value("販管費", full_text)
+        data["営業利益"] = extract_specific_value("営業利益", full_text)
+        data["受取利息・配当金"] = extract_specific_value("受取利息・配当金", full_text)
+        data["支払利息"] = extract_specific_value("支払利息", full_text)
+        data["経常利益"] = extract_specific_value("経常利益", full_text)
+        data["当期純利益"] = extract_specific_value("当期純利益", full_text)
 
-        # 特にブレやすい長期借入金や売上高、仕入債務などを強制再チェック
-        def force_extract(keyword, text_list):
-            for line in text_list:
-                if keyword in line:
-                    nums = re.findall(r"([-\d,\.]+)", line)
-                    for n in nums:
-                        c = n.replace(",", "").replace(".", "").strip()
-                        try:
-                            v = int(c)
-                            return v
-                        except:
-                            continue
-            return 0
-
-        # 個別補正
-        for k in data.keys():
+        # セッション状態に反映
+        for k, v in data.items():
             if k != "決算月":
-                v = force_extract(k, all_lines)
-                if v != 0:
-                    data[k] = v
-                st.session_state[f"val_{k}"] = data[k]
+                st.session_state[f"val_{k}"] = v
                 
         # 減価償却費の合算
+        dep_matches = re.findall(r"減価償却費\s*([-\d,\.]+)", full_text)
         total_dep = 0
-        for line in all_lines:
-            if "減価償却費" in line:
-                nums = re.findall(r"([-\d,\.]+)", line)
-                for n in nums:
-                    try:
-                        total_dep += int(n.replace(",", "").replace(".", ""))
-                    except:
-                        pass
-        if total_dep > 0:
+        for d in dep_matches:
+            try:
+                total_dep += int(d.replace(",", "").replace(".", ""))
+            except:
+                pass
+        if total_dep > 0: 
             data["減価償却費"] = total_dep
             st.session_state["val_減価償却費"] = total_dep
-
-    st.success("企業ドックPDFの財務数値を完全に正確に読み込みました。")
+            
+    st.success("企業ドックPDFから数値を正常に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
