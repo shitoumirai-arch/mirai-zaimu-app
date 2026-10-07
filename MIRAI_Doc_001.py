@@ -10,7 +10,7 @@ from openpyxl.utils import get_column_letter
 st.set_page_config(page_title="【MIRAIサポート】財務・格付け診断アプリ", layout="wide")
 
 st.title("🏦 財務・格付け診断 ＆ 逆算シミュレーション")
-st.markdown("財務データの入力・実態修正、および銀行OBによる所見の入力を行い、スタイリッシュなExcelレポートをダウンロードできます。")
+st.markdown("bixidの企業ドックPDF（7ページ目以降の評価ブロック）から数値を高精度に自動抽出します。")
 
 # --- 補助関数：カンマ区切りの入力欄 ---
 def input_with_comma(label, default_value):
@@ -43,51 +43,80 @@ data = {
 
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
-        text = ""
+        target_text = ""
+        # 7ページ目以降（または全ページの中で「金融機関からの評価」が含まれるページ）を重点的に抽出
         for page in pdf.pages:
-            text += page.extract_text() or ""
+            p_text = page.extract_text() or ""
+            if "金融機関からの評価" in p_text or "貸借対照表" in p_text:
+                target_text += p_text + "\n"
         
-        month_match = re.search(r"\[(\d{4}/\d{1,2})\]", text)
+        # 万が一見つからない場合は全テキストを対象にする
+        if not target_text:
+            for page in pdf.pages:
+                target_text += (page.extract_text() or "") + "\n"
+        
+        month_match = re.search(r"\[(\d{4}/\d{1,2})\]", target_text)
         if month_match:
             data["決算月"] = month_match.group(1)
         
+        # 7ページ目のB/S・P/L表のレイアウト（項目名の直後または付近にある金額）を高精度でキャッチ
         patterns = {
-            "流動資産": r"流動資産[\s\|]*([\d,\.]+)", "売上債権": r"売上債権[\s\|]*([\d,\.]+)",
-            "棚卸資産": r"棚卸資産[\s\|]*([\d,\.]+)", "固定資産": r"固定資産[\s\|]*([\d,\.]+)",
-            "繰延資産": r"繰延資産[\s\|]*([\d,\.]+)", "総資産": r"総資産[\s\|]*([\d,\.]+)",
-            "流動負債": r"流動負債[\s\|]*([\d,\.]+)", "仕入債務": r"仕入債務[\s\|]*([\d,\.]+)",
-            "短期借入金": r"短期借入金[\s\|]*([\d,\.]+)", "固定負債": r"固定負債[\s\|]*([\d,\.]+)",
-            "長期借入金": r"長期借入金[\s\|]*([\d,\.]+)", "社債": r"社債[\s\|]*([\d,\.]+)",
-            "純資産": r"純資産[\s\|]*([-\d,\.]+)",
-            "売上高": r"売上高[\s\|]*([\d,\.]+)", "売上原価": r"売上原価[\s\|]*([\d,\.]+)",
-            "売上総利益": r"売上総利益[\s\|]*([-\d,\.]+)", "人件費": r"人件費[\s\|]*([\d,\.]+)",
-            "販管費": r"販管費[\s\|]*([\d,\.]+)", "営業利益": r"営業利益[\s\|]*([-\d,\.]+)",
-            "受取利息・配当金": r"受取利息・配当金[\s\|]*([\d,\.]+)", "支払利息": r"支払利息[\s\|]*([\d,\.]+)",
-            "経常利益": r"経常利益[\s\|]*([-\d,\.]+)", "当期純利益": r"当期純利益[\s\|]*([-\d,\.]+)"
+            "流動資産": r"流動資産\s*([-\d,\.]+)",
+            "売上債権": r"売上債権\s*([-\d,\.]+)",
+            "棚卸資産": r"棚卸資産\s*([-\d,\.]+)",
+            "固定資産": r"固定資産\s*([-\d,\.]+)",
+            "繰延資産": r"繰延資産\s*([-\d,\.]+)",
+            "総資産": r"総資産\s*([-\d,\.]+)",
+            
+            "流動負債": r"流動負債\s*([-\d,\.]+)",
+            "仕入債務": r"仕入債務\s*([-\d,\.]+)",
+            "短期借入金": r"短期借入金\s*([-\d,\.]+)",
+            "固定負債": r"固定負債\s*([-\d,\.]+)",
+            "長期借入金": r"長期借入金\s*([-\d,\.]+)",
+            "社債": r"社債\s*([-\d,\.]+)",
+            "純資産": r"純資産\s*([-\d,\.]+)",
+            
+            "売上高": r"売上高\s*([-\d,\.]+)",
+            "売上原価": r"売上原価\s*([-\d,\.]+)",
+            "売上総利益": r"売上総利益\s*([-\d,\.]+)",
+            "人件費": r"人件費\s*([-\d,\.]+)",
+            "販管費": r"販管費\s*([-\d,\.]+)",
+            "営業利益": r"営業利益\s*([-\d,\.]+)",
+            "受取利息・配当金": r"受取利息・配当金\s*([-\d,\.]+)",
+            "支払利息": r"支払利息\s*([-\d,\.]+)",
+            "経常利益": r"経常利益\s*([-\d,\.]+)",
+            "当期純利益": r"当期純利益\s*([-\d,\.]+)"
         }
         
         for key, pattern in patterns.items():
-            match = re.search(pattern, text)
+            match = re.search(pattern, target_text)
             if match:
                 try:
-                    val_int = int(match.group(1).replace(",", "").replace(".", ""))
+                    val_str = match.group(1).replace(",", "").replace(".", "")
+                    val_int = int(val_str)
                     data[key] = val_int
                     st.session_state[f"val_{key}"] = val_int
                 except ValueError:
                     pass
                     
-        total_dep = sum([int(d.replace(",", "").replace(".", "")) for d in re.findall(r"減価償却費[\s\|]*([\d,\.]+)", text)])
+        # 減価償却費の合算
+        depreciations = re.findall(r"減価償却費\s*([-\d,\.]+)", target_text)
+        total_dep = 0
+        for dep in depreciations:
+            try:
+                total_dep += int(dep.replace(",", "").replace(".", ""))
+            except:
+                pass
         if total_dep > 0: 
             data["減価償却費"] = total_dep
             st.session_state["val_減価償却費"] = total_dep
             
-    st.success("PDFの読み込みが完了しました。")
+    st.success("7ページ目の評価ブロックから財務数値を高精度に読み込みました。")
 
 # メインタブの作成
 tab1, tab2, tab3 = st.tabs(["📝 1.財務データ・所見入力", "📊 2.財務分析＆レーダーチャート", "💰 3.借入余力シミュレーション"])
 
 with tab1:
-    st.markdown("###### 実態修正や、銀行OBとしての総合所見・今後の課題をここに入力してください。")
     col_info1, col_info2, col_info3 = st.columns(3)
     with col_info1: company_name = st.text_input("企業名", value="株式会社〇〇")
     with col_info2: kessan_tsuki = st.text_input("決算月", value=data["決算月"] if data["決算月"] else "2026/3")
@@ -123,7 +152,7 @@ with tab1:
     st.markdown("---")
     st.markdown("#### ✍️ 診断者（銀行OB）の総合所見・今後の課題")
     diagnosis_opinion = st.text_area(
-        "ここに銀行OBとしての評価、改善に向けたアドバイス、提案内容などを自由に記載してください（Excelに出力されます）。",
+        "ここに銀行OBとしての評価、改善に向けたアドバイスなどを自由に記載してください（Excelに出力されます）。",
         value="【現状評価】\n表面上は債務超過であるが、役員借入金等を考慮した実態ベースでは正常先の範疇にある。\n\n【今後の課題・対策】\n来期の追加融資を見据え、売上高経常利益率の改善および固定費の見直しが急務である。",
         height=150
     )
@@ -149,9 +178,7 @@ nenshu_per_head = safe_div(jinkenhi, jugyoin)
 
 with tab2:
     st.markdown(f"### 📈 財務指標分析レポート （{company_name} / {kessan_tsuki}期）")
-    
     col_chart, col_metrics = st.columns([1, 1.5])
-    
     with col_chart:
         score_shihon = 5 if jikoshihon_hiritsu >= 30 else 4 if jikoshihon_hiritsu >= 15 else 3 if jikoshihon_hiritsu >= 0 else 2 if jikoshihon_hiritsu >= -10 else 1
         score_ryudo = 5 if ryudo_hiritsu >= 150 else 4 if ryudo_hiritsu >= 100 else 3 if ryudo_hiritsu >= 80 else 2 if ryudo_hiritsu >= 50 else 1
@@ -224,11 +251,9 @@ with tab3:
 # --- スタイリッシュなExcel生成・ダウンロード機能 ---
 st.markdown("---")
 st.markdown("### 📥 スタイリッシュ診断レポート（Excel）ダウンロード")
-st.markdown("入力されたデータ、分析指標、シミュレーション結果に加え、**銀行OBの総合所見**が美しくデザインされたExcelファイルとして出力されます。")
 
 output = io.BytesIO()
 with pd.ExcelWriter(output, engine='openpyxl') as writer:
-    # 1. 基本・BS/PLデータ
     df_bs_pl = pd.DataFrame({
         "項目": [
             "企業名", "決算月", "従業員数",
@@ -245,7 +270,6 @@ with pd.ExcelWriter(output, engine='openpyxl') as writer:
     })
     df_bs_pl.to_excel(writer, sheet_name="財務データ", index=False)
     
-    # 2. 財務分析指標
     df_analysis = pd.DataFrame({
         "指標カテゴリ": ["収益性", "収益性", "収益性", "資金力", "資金力", "資金力", "安全性", "安全性", "安全性", "効率性", "効率性", "効率性"],
         "指標名": [
@@ -263,7 +287,6 @@ with pd.ExcelWriter(output, engine='openpyxl') as writer:
     })
     df_analysis.to_excel(writer, sheet_name="財務分析指標", index=False)
     
-    # 3. 借入余力シミュレーション
     df_sim = pd.DataFrame({
         "シミュレーション項目": [
             "正常運転資金（短期枠）",
@@ -282,7 +305,6 @@ with pd.ExcelWriter(output, engine='openpyxl') as writer:
     })
     df_sim.to_excel(writer, sheet_name="借入余力・逆算シミュレーション", index=False)
 
-    # 4. 銀行OBの総合所見
     df_opinion = pd.DataFrame({
         "項目": ["対象企業", "決算月", "銀行OB 総合所見・今後の課題"],
         "内容": [company_name, kessan_tsuki, diagnosis_opinion]
@@ -290,27 +312,17 @@ with pd.ExcelWriter(output, engine='openpyxl') as writer:
     df_opinion.to_excel(writer, sheet_name="総合所見", index=False)
 
 excel_data = output.getvalue()
-
-# --- openpyxlを使ったスタイリッシュな書式適用 ---
 excel_io = io.BytesIO(excel_data)
-import openpyxl
 wb = openpyxl.load_workbook(excel_io)
 
-# デザイン定義
-header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid") # ネイビー
+header_fill = PatternFill(start_color="1F4E78", end_color="1F4E78", fill_type="solid")
 header_font = Font(name="Meiryo", size=11, bold=True, color="FFFFFF")
 cell_font = Font(name="Meiryo", size=10)
-stripe_fill = PatternFill(start_color="F9FBFD", end_color="F9FBFD", fill_type="solid") # 薄いブルーグレー
-border_thin = Border(
-    left=Side(style='thin', color='D9D9D9'),
-    right=Side(style='thin', color='D9D9D9'),
-    top=Side(style='thin', color='D9D9D9'),
-    bottom=Side(style='thin', color='D9D9D9')
-)
+stripe_fill = PatternFill(start_color="F9FBFD", end_color="F9FBFD", fill_type="solid")
+border_thin = Border(left=Side(style='thin', color='D9D9D9'), right=Side(style='thin', color='D9D9D9'), top=Side(style='thin', color='D9D9D9'), bottom=Side(style='thin', color='D9D9D9'))
 
 for sheet in wb.sheetnames:
     ws = wb[sheet]
-    # 1行目（ヘッダー）の装飾
     for col_num in range(1, ws.max_column + 1):
         cell = ws.cell(row=1, column=col_num)
         cell.fill = header_fill
@@ -319,7 +331,6 @@ for sheet in wb.sheetnames:
         cell.border = border_thin
     ws.row_dimensions[1].height = 25
 
-    # データ行の装飾
     for row_num in range(2, ws.max_row + 1):
         ws.row_dimensions[row_num].height = 20
         is_stripe = (row_num % 2 == 0)
@@ -329,33 +340,26 @@ for sheet in wb.sheetnames:
             cell.border = border_thin
             if is_stripe:
                 cell.fill = stripe_fill
-            # 数値列や金額列は右寄せ、他は左寄せ
             if col_num > 1 and sheet != "総合所見":
                 cell.alignment = Alignment(horizontal="right", vertical="center")
             else:
                 cell.alignment = Alignment(horizontal="left", vertical="center")
 
-    # 列幅の自動調整
     for col in ws.columns:
         max_len = 0
         col_letter = get_column_letter(col[0].column)
         for cell in col:
             if cell.value:
-                val_str = str(cell.value)
-                # 改行が含まれている場合は最長の行を基準にする
-                lines = val_str.split('\n')
-                for line in lines:
-                    if len(line) > max_len:
-                        max_len = len(line)
+                for line in str(cell.value).split('\n'):
+                    if len(line) > max_len: max_len = len(line)
         ws.column_dimensions[col_letter].width = max(max_len * 2 + 4, 15)
 
 final_output = io.BytesIO()
 wb.save(final_output)
-final_excel_data = final_output.getvalue()
 
 st.download_button(
     label="📊 スタイリッシュなExcelレポートをダウンロード",
-    data=final_excel_data,
+    data=final_output.getvalue(),
     file_name=f"財務格付け診断レポート_{company_name}.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
