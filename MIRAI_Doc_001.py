@@ -9,9 +9,7 @@ st.markdown("bixidの「企業ドック診断結果(PDF)」をアップロード
 
 # --- 補助関数：カンマ区切りの入力欄を作る ---
 def input_with_comma(label, default_value):
-    # カンマ付きの文字列としてテキストボックスを表示
     val_str = st.text_input(label, value=f"{default_value:,}")
-    # カンマや全角半角のスペースを除去して数値（整数）に戻す
     try:
         return int(val_str.replace(",", "").replace(" ", "").replace(" ", ""))
     except ValueError:
@@ -27,27 +25,33 @@ data = {
     "営業利益": 0, "減価償却費": 0
 }
 
-# PDFからのテキスト抽出と数値解析
+# PDFからのテキスト抽出と数値解析（強化版）
 if uploaded_file is not None:
     with pdfplumber.open(uploaded_file) as pdf:
         text = ""
         for page in pdf.pages:
             text += page.extract_text() or ""
         
+        # [\s\|]* で空白や表の区切り線を無視し、[\d,\.]+ でピリオド誤認識も拾う
         patterns = {
-            "売上債権": r"売上債権\s*([\d,]+)",
-            "棚卸資産": r"棚卸資産\s*([\d,]+)",
-            "仕入債務": r"仕入債務\s*([\d,]+)",
-            "短期借入金": r"短期借入金\s*([\d,]+)",
-            "長期借入金": r"長期借入金\s*([\d,]+)",
-            "営業利益": r"営業利益\s*([-\d,]+)",
-            "減価償却費": r"減価償却費\s*([\d,]+)"
+            "売上債権": r"売上債権[\s\|]*([\d,\.]+)",
+            "棚卸資産": r"棚卸資産[\s\|]*([\d,\.]+)",
+            "仕入債務": r"仕入債務[\s\|]*([\d,\.]+)",
+            "短期借入金": r"短期借入金[\s\|]*([\d,\.]+)",
+            "長期借入金": r"長期借入金[\s\|]*([\d,\.]+)",
+            "営業利益": r"営業利益[\s\|]*([-\d,\.]+)",
+            "減価償却費": r"減価償却費[\s\|]*([\d,\.]+)"
         }
         
         for key, pattern in patterns.items():
             match = re.search(pattern, text)
             if match:
-                data[key] = int(match.group(1).replace(",", ""))
+                # カンマと、誤認識されたピリオドを除去して数値化
+                val_str = match.group(1).replace(",", "").replace(".", "")
+                try:
+                    data[key] = int(val_str)
+                except ValueError:
+                    pass
     st.success("PDFの読み込みが完了しました。数値を自動入力しています（必要に応じて手修正してください）。")
 
 # 2. 抽出データの確認・修正エリア
@@ -69,7 +73,7 @@ kizon_kariire = tanki + chouki
 kani_cf = eigyo + shokyaku
 
 # 3. シミュレーション実行エリア
-st.header("2. 融希可能額・逆算シミュレーション")
+st.header("2. 融資可能額・逆算シミュレーション")
 
 col3, col4 = st.columns(2)
 with col3:
@@ -89,7 +93,7 @@ with col3:
 
 with col4:
     st.subheader("【ブロック3】目標利益の逆算")
-    kibou_gaku = st.number_input("追加希望融資額（円）", min_value=0, value=10000000, step=1000000)
+    kibou_gaku = input_with_comma("追加希望融資額（円）", 10000000)
     hensai_kikan = st.slider("希望返済期間（年）", min_value=1, max_value=20, value=7)
     
     hitsuyou_cf = (kizon_kariire + kibou_gaku) / hensai_kikan
